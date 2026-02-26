@@ -1,0 +1,5 @@
+dm-control
+dm-env
+open_spiel
+numpy
+absl-py
