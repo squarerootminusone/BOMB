@@ -1,0 +1,985 @@
+"""Robosuite-backed 5x5 Go environment with rigid stone bodies."""
+
+from __future__ import annotations
+
+from collections import OrderedDict
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+
+try:
+    import pyspiel
+except Exception as exc:  # pragma: no cover - import diagnostics path
+    pyspiel = None
+    _PYSPIEL_IMPORT_ERROR = exc
+else:
+    _PYSPIEL_IMPORT_ERROR = None
+
+from robosuite.controllers import load_composite_controller_config
+from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
+from robosuite.models.arenas import TableArena
+from robosuite.models.objects import CylinderObject
+from robosuite.models.tasks import ManipulationTask
+from robosuite.utils.mjcf_utils import new_geom
+
+from .common import GoResetOptions
+
+SELF = 0
+OPPONENT = 1
+
+
+class _OpenSpielGoLogic:
+    """Small OpenSpiel go wrapper for legal actions and board-state tracking."""
+
+    def __init__(self, board_size: int):
+        if pyspiel is None:
+            raise ImportError(
+                "pyspiel is required for the robosuite Go backend but could not be imported"
+            ) from _PYSPIEL_IMPORT_ERROR
+        self._board_size = int(board_size)
+        self._game = pyspiel.load_game("go", {"board_size": self._board_size})
+        self.reset()
+
+    def reset(self) -> None:
+        self._state = self._game.new_initial_state()
+        self._moves = np.full((self._board_size * self._board_size * 2,), fill_value=-1, dtype=np.int32)
+        self._move_id = 0
+
+    @property
+    def board_size(self) -> int:
+        return self._board_size
+
+    @property
+    def is_game_over(self) -> bool:
+        return bool(self._state.is_terminal())
+
+    def legal_actions(self) -> List[int]:
+        return [int(a) for a in self._state.legal_actions()]
+
+    def apply(self, player: int, action_int: int) -> bool:
+        action_int = int(action_int)
+        if int(self._state.current_player()) != int(player):
+            return False
+        legal = self._state.legal_actions()
+        if action_int not in legal:
+            return False
+        self._state.apply_action(action_int)
+        if self._move_id < self._moves.shape[0]:
+            self._moves[self._move_id] = action_int
+            self._move_id += 1
+        return True
+
+    def get_board_state(self) -> np.ndarray:
+        board_state = np.reshape(
+            np.array(self._state.observation_tensor(0), dtype=bool),
+            [4, self._board_size, self._board_size],
+        )
+        board_state = np.transpose(board_state, [1, 2, 0])
+        # Match physics_planning_games channel convention used by the benchmark.
+        return board_state[:, :, [2, 0, 1, 3]]
+
+    def get_move_history(self) -> np.ndarray:
+        return self._moves.copy()
+
+
+class _Go5x5RigidRobosuite(ManipulationEnv):
+    """Minimal robosuite task: table + board visual + rigid stone cylinders."""
+
+    def __init__(
+        self,
+        robots: str = "Panda",
+        controller_configs: Optional[dict] = None,
+        gripper_types: str = "default",
+        initialization_noise: str | dict | None = "default",
+        has_renderer: bool = False,
+        has_offscreen_renderer: bool = True,
+        render_camera: str = "agentview",
+        render_collision_mesh: bool = False,
+        render_visual_mesh: bool = True,
+        render_gpu_device_id: int = -1,
+        control_freq: int = 20,
+        lite_physics: bool = True,
+        horizon: int = 400,
+        ignore_done: bool = False,
+        hard_reset: bool = True,
+        camera_names: str = "agentview",
+        camera_heights: int = 256,
+        camera_widths: int = 256,
+        renderer: str = "mujoco",
+        renderer_config: Optional[dict] = None,
+        seed: Optional[int] = None,
+    ):
+        self.board_size = 5
+        self.table_full_size = np.array((0.9, 0.9, 0.05), dtype=np.float32)
+        self.table_friction = (1.0, 5e-3, 1e-4)
+        self.table_offset = np.array((0.0, 0.0, 0.8), dtype=np.float32)
+
+        self.board_spacing = 0.045
+        self.board_center_xy = np.array((0.02, 0.0), dtype=np.float32)
+        self.stone_radius = 0.013
+        self.stone_height = 0.006
+        self.stone_half_height = self.stone_height * 0.5
+
+        self._stone_objects: List[CylinderObject] = []
+        self._stone_joint_names: List[str] = []
+        self._stone_body_ids: List[int] = []
+
+        self._white_count = self.board_size * self.board_size
+        self._black_count = self.board_size * self.board_size
+
+        super().__init__(
+            robots=robots,
+            env_configuration="default",
+            controller_configs=controller_configs,
+            base_types="default",
+            gripper_types=gripper_types,
+            initialization_noise=initialization_noise,
+            use_camera_obs=False,
+            has_renderer=has_renderer,
+            has_offscreen_renderer=has_offscreen_renderer,
+            render_camera=render_camera,
+            render_collision_mesh=render_collision_mesh,
+            render_visual_mesh=render_visual_mesh,
+            render_gpu_device_id=render_gpu_device_id,
+            control_freq=control_freq,
+            lite_physics=lite_physics,
+            horizon=horizon,
+            ignore_done=ignore_done,
+            hard_reset=hard_reset,
+            camera_names=camera_names,
+            camera_heights=camera_heights,
+            camera_widths=camera_widths,
+            camera_depths=False,
+            camera_segmentations=None,
+            renderer=renderer,
+            renderer_config=renderer_config,
+            seed=seed,
+        )
+
+    @property
+    def table_top_z(self) -> float:
+        return float(self.table_offset[2])
+
+    @property
+    def board_intersections_xyz(self) -> np.ndarray:
+        grid = np.zeros((self.board_size, self.board_size, 3), dtype=np.float32)
+        half = 0.5 * float(self.board_size - 1)
+        z = self.table_top_z + self.stone_half_height + 0.0005
+        for row in range(self.board_size):
+            for col in range(self.board_size):
+                x = self.board_center_xy[0] + (float(col) - half) * self.board_spacing
+                y = self.board_center_xy[1] + (half - float(row)) * self.board_spacing
+                grid[row, col] = np.array([x, y, z], dtype=np.float32)
+        return grid
+
+    @property
+    def source_stone_xyz(self) -> np.ndarray:
+        board_half = 0.5 * float(self.board_size - 1) * self.board_spacing
+        x = self.board_center_xy[0] - board_half - 0.12
+        y = self.board_center_xy[1]
+        z = self.table_top_z + self.stone_half_height + 0.0005
+        return np.array([x, y, z], dtype=np.float32)
+
+    @property
+    def white_stone_indices(self) -> List[int]:
+        return list(range(self._white_count))
+
+    @property
+    def black_stone_indices(self) -> List[int]:
+        start = self._white_count
+        return list(range(start, start + self._black_count))
+
+    def reward(self, action=None):
+        del action
+        return 0.0
+
+    def _load_model(self):
+        super()._load_model()
+
+        xpos = self.robots[0].robot_model.base_xpos_offset["table"](float(self.table_full_size[0]))
+        self.robots[0].robot_model.set_base_xpos(xpos)
+
+        mujoco_arena = TableArena(
+            table_full_size=tuple(self.table_full_size.tolist()),
+            table_friction=self.table_friction,
+            table_offset=tuple(self.table_offset.tolist()),
+        )
+        mujoco_arena.set_origin([0.0, 0.0, 0.0])
+        self._add_board_visuals(mujoco_arena=mujoco_arena)
+
+        self._stone_objects = []
+        for idx in range(self._white_count):
+            self._stone_objects.append(
+                CylinderObject(
+                    name=f"white_stone_{idx}",
+                    size=[self.stone_radius, self.stone_half_height],
+                    rgba=[0.96, 0.96, 0.96, 1.0],
+                    density=1000.0,
+                    friction=[1.0, 0.01, 0.001],
+                    rng=self.rng,
+                )
+            )
+        for idx in range(self._black_count):
+            self._stone_objects.append(
+                CylinderObject(
+                    name=f"black_stone_{idx}",
+                    size=[self.stone_radius, self.stone_half_height],
+                    rgba=[0.08, 0.08, 0.08, 1.0],
+                    density=1000.0,
+                    friction=[1.0, 0.01, 0.001],
+                    rng=self.rng,
+                )
+            )
+
+        self.model = ManipulationTask(
+            mujoco_arena=mujoco_arena,
+            mujoco_robots=[robot.robot_model for robot in self.robots],
+            mujoco_objects=self._stone_objects,
+        )
+
+    def _add_board_visuals(self, mujoco_arena: TableArena) -> None:
+        table_body = mujoco_arena.table_body
+        table_half_h = 0.5 * float(self.table_full_size[2])
+        board_half = 0.5 * float(self.board_size - 1) * self.board_spacing + 0.02
+        board_thickness = 0.0025
+        board_center_local = np.array(
+            [
+                self.board_center_xy[0],
+                self.board_center_xy[1],
+                table_half_h + board_thickness,
+            ],
+            dtype=np.float32,
+        )
+        table_body.append(
+            new_geom(
+                name="go_board_surface",
+                type="box",
+                size=[board_half, board_half, board_thickness],
+                pos=board_center_local,
+                group=1,
+                rgba=[0.74, 0.62, 0.46, 1.0],
+                contype="0",
+                conaffinity="0",
+            )
+        )
+
+        line_half = 0.0012
+        line_h = 0.001
+        half = 0.5 * float(self.board_size - 1) * self.board_spacing
+        line_z = table_half_h + (2.0 * board_thickness) + line_h
+        for i in range(self.board_size):
+            delta = -half + float(i) * self.board_spacing
+            table_body.append(
+                new_geom(
+                    name=f"go_line_col_{i}",
+                    type="box",
+                    size=[line_half, half, line_h],
+                    pos=[
+                        self.board_center_xy[0] + delta,
+                        self.board_center_xy[1],
+                        line_z,
+                    ],
+                    group=1,
+                    rgba=[0.20, 0.16, 0.10, 1.0],
+                    contype="0",
+                    conaffinity="0",
+                )
+            )
+            table_body.append(
+                new_geom(
+                    name=f"go_line_row_{i}",
+                    type="box",
+                    size=[half, line_half, line_h],
+                    pos=[
+                        self.board_center_xy[0],
+                        self.board_center_xy[1] + delta,
+                        line_z,
+                    ],
+                    group=1,
+                    rgba=[0.20, 0.16, 0.10, 1.0],
+                    contype="0",
+                    conaffinity="0",
+                )
+            )
+
+    def _setup_references(self):
+        super()._setup_references()
+        self._stone_joint_names = [obj.joints[0] for obj in self._stone_objects]
+        self._stone_body_ids = [self.sim.model.body_name2id(obj.root_body) for obj in self._stone_objects]
+
+    def _setup_observables(self):
+        return super()._setup_observables()
+
+    def _reset_internal(self):
+        super()._reset_internal()
+        for stone_idx in range(len(self._stone_objects)):
+            self.hide_stone(stone_idx)
+        self.sim.forward()
+
+    def _check_success(self):
+        return False
+
+    def _offboard_slot_xyz(self, slot_idx: int) -> np.ndarray:
+        slot_idx = int(slot_idx)
+        row = slot_idx // 8
+        col = slot_idx % 8
+        x0 = self.board_center_xy[0] + 0.24
+        y0 = self.board_center_xy[1] - 0.26
+        x = x0 + 0.026 * float(col)
+        y = y0 + 0.026 * float(row)
+        z = self.table_top_z + self.stone_half_height + 0.0005
+        return np.array([x, y, z], dtype=np.float32)
+
+    def set_stone_pose(self, stone_idx: int, pos: np.ndarray, quat_wxyz: Optional[np.ndarray] = None) -> None:
+        stone_idx = int(stone_idx)
+        if quat_wxyz is None:
+            quat_wxyz = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+        qpos = np.concatenate([np.asarray(pos, dtype=np.float64), np.asarray(quat_wxyz, dtype=np.float64)], axis=0)
+        self.sim.data.set_joint_qpos(self._stone_joint_names[stone_idx], qpos)
+        self.sim.data.set_joint_qvel(self._stone_joint_names[stone_idx], np.zeros((6,), dtype=np.float64))
+
+    def hide_stone(self, stone_idx: int) -> None:
+        self.set_stone_pose(stone_idx=stone_idx, pos=self._offboard_slot_xyz(stone_idx))
+
+    def get_stone_pos(self, stone_idx: int) -> np.ndarray:
+        return np.array(self.sim.data.body_xpos[self._stone_body_ids[int(stone_idx)]], dtype=np.float32)
+
+    def check_stone_grasped(self, stone_idx: int) -> bool:
+        return bool(
+            self._check_grasp(
+                gripper=self.robots[0].gripper,
+                object_geoms=self._stone_objects[int(stone_idx)],
+            )
+        )
+
+    def get_eef_pose(self) -> np.ndarray:
+        robot = self.robots[0]
+        arm = robot.arms[0] if len(robot.arms) > 0 else "right"
+        site_id = int(robot.eef_site_id[arm])
+        pose = np.eye(4, dtype=np.float32)
+        pose[:3, 3] = np.asarray(self.sim.data.site_xpos[site_id], dtype=np.float32)
+        pose[:3, :3] = np.asarray(self.sim.data.site_xmat[site_id], dtype=np.float32).reshape(3, 3)
+        return pose
+
+    def render_rgb(self, height: int, width: int, camera_name: Optional[str] = None) -> np.ndarray:
+        camera = self.camera_names[0] if camera_name is None else camera_name
+        return self.sim.render(
+            camera_name=camera,
+            width=int(width),
+            height=int(height),
+        )[::-1]
+
+
+class GoRobosuiteBenchmarkEnv:
+    """
+    MimicGen-friendly wrapper around a robosuite Go-like 5x5 rigid-stone task.
+
+    This backend keeps the benchmark API from GoJacoBenchmarkEnv while making
+    move commits depend on a physically placed rigid stone.
+    """
+
+    def __init__(
+        self,
+        seed: int = 0,
+        environment_name: str = "robosuite_go_5x5_rigid_bodies",
+        include_image_obs: bool = True,
+        camera_height: int = 84,
+        camera_width: int = 84,
+        action_scale: float = 0.03,
+        hover_height: float = 0.16,
+        press_height: float = 0.03,
+        reach_xy_threshold: float = 0.03,
+        max_steps: int = 220,
+        success_hold_steps: int = 0,
+        drive_physical_arm: bool = True,
+        enable_opponent_moves: bool = False,
+        opening_with_opponent: bool = True,
+        render_carried_stone: bool = True,
+        render_eef_overlay: bool = True,
+        eef_overlay_trail: int = 10,
+        gnugo_path: Optional[str] = None,
+        robot: str = "Panda",
+        gripper_types: str = "default",
+    ):
+        del drive_physical_arm
+        del render_carried_stone
+        del gnugo_path
+        self.seed = int(seed)
+        self._rng = np.random.RandomState(self.seed)
+        self.environment_name = str(environment_name)
+
+        controller_config = self._make_controller_config(robot=robot)
+        self._rs_env = _Go5x5RigidRobosuite(
+            robots=robot,
+            controller_configs=controller_config,
+            gripper_types=gripper_types,
+            has_renderer=False,
+            has_offscreen_renderer=True,
+            render_camera="agentview",
+            camera_names="agentview",
+            camera_heights=int(max(camera_height, 84)),
+            camera_widths=int(max(camera_width, 84)),
+            horizon=max(200, int(max_steps) + 80),
+            ignore_done=True,
+            hard_reset=True,
+            renderer="mujoco",
+            seed=self.seed,
+        )
+
+        self.include_image_obs = bool(include_image_obs)
+        self.camera_height = int(camera_height)
+        self.camera_width = int(camera_width)
+
+        self.action_scale = float(action_scale)
+        self.reach_xy_threshold = float(reach_xy_threshold)
+        self.max_steps = int(max_steps)
+        self.success_hold_steps = max(0, int(success_hold_steps))
+        self.enable_opponent_moves = bool(enable_opponent_moves)
+        self.opening_with_opponent = bool(opening_with_opponent)
+        self.render_eef_overlay = bool(render_eef_overlay)
+        self.eef_overlay_trail = max(0, int(eef_overlay_trail))
+
+        self.board_size = int(self._rs_env.board_size)
+        self._logic = _OpenSpielGoLogic(board_size=self.board_size)
+        self._intersection_xyz = self._rs_env.board_intersections_xyz.copy()
+        self._source_xyz = self._rs_env.source_stone_xyz.copy()
+        self.table_top_z = float(self._rs_env.table_top_z)
+        self.hover_height = self.table_top_z + float(hover_height)
+        self.press_height = self.table_top_z + float(press_height)
+
+        self.place_xy_threshold = 0.018
+        self.place_z_threshold = 0.012
+
+        self.workspace_low, self.workspace_high = self._compute_workspace_bounds()
+        self._robot = self._rs_env.robots[0]
+        self._arm_key, self._arm_dim, self._gripper_key, self._gripper_dim = self._resolve_action_keys()
+        self._controller_xyz_max = self._infer_controller_xyz_max()
+
+        self._target_rc: Tuple[int, int] = (0, 0)
+        self._target_pose = np.eye(4, dtype=np.float32)
+        self._gripper_action = np.zeros((1,), dtype=np.float32)
+        self._eef_trail: List[np.ndarray] = []
+
+        self._available_stones: Dict[int, List[int]] = {
+            SELF: [],
+            OPPONENT: [],
+        }
+        self._stone_assignments: Dict[Tuple[int, int, int], int] = {}
+        self._active_white_stone_idx: Optional[int] = None
+
+        self._step_count = 0
+        self._move_committed = False
+        self._success_step: Optional[int] = None
+        self._queued_reset_options: Optional[GoResetOptions] = None
+
+        self.reset()
+
+    @staticmethod
+    def _make_controller_config(robot: str) -> dict:
+        return load_composite_controller_config(robot=robot)
+
+    def _resolve_action_keys(self) -> Tuple[str, int, Optional[str], int]:
+        action_splits = dict(self._robot._action_split_indexes)
+        primary_arm = self._robot.arms[0] if len(self._robot.arms) > 0 else "right"
+        arm_key = primary_arm if primary_arm in action_splits else None
+        arm_dim = 0
+        if arm_key is not None:
+            arm_dim = int(action_splits[arm_key][1] - action_splits[arm_key][0])
+        primary_gripper_key = self._robot.get_gripper_name(primary_arm)
+        gripper_key = primary_gripper_key if primary_gripper_key in action_splits else None
+        gripper_dim = 0
+        if gripper_key is not None:
+            gripper_dim = int(action_splits[gripper_key][1] - action_splits[gripper_key][0])
+        for key, (start, end) in action_splits.items():
+            dim = int(end - start)
+            if dim <= 0:
+                continue
+            if ("gripper" in key) and (gripper_key is None):
+                gripper_key = key
+                gripper_dim = dim
+            elif arm_key is None:
+                arm_key = key
+                arm_dim = dim
+        if arm_key is None:
+            raise RuntimeError("Could not resolve robosuite arm action key")
+        return arm_key, arm_dim, gripper_key, gripper_dim
+
+    def _infer_controller_xyz_max(self) -> np.ndarray:
+        try:
+            part_ctrl = self._robot.part_controllers.get(self._arm_key, None)
+            if (part_ctrl is not None) and hasattr(part_ctrl, "output_max"):
+                output_max = np.asarray(part_ctrl.output_max, dtype=np.float32).reshape(-1)
+                if output_max.size >= 3:
+                    return np.maximum(output_max[:3], 1e-4)
+        except Exception:
+            pass
+        return np.ones((3,), dtype=np.float32)
+
+    @property
+    def base_env(self):
+        return self
+
+    @property
+    def physics(self):
+        return self._rs_env.sim
+
+    def _compute_workspace_bounds(self) -> Tuple[np.ndarray, np.ndarray]:
+        board_xy = self._intersection_xyz[:, :, :2].reshape(-1, 2)
+        source_xy = self._source_xyz[:2].reshape(1, 2)
+        full_xy = np.concatenate([board_xy, source_xy], axis=0)
+        low_xy = full_xy.min(axis=0) - np.array([0.16, 0.16], dtype=np.float32)
+        high_xy = full_xy.max(axis=0) + np.array([0.16, 0.16], dtype=np.float32)
+        low = np.array([low_xy[0], low_xy[1], self.table_top_z], dtype=np.float32)
+        high = np.array([high_xy[0], high_xy[1], self.table_top_z + 0.38], dtype=np.float32)
+        return low, high
+
+    @staticmethod
+    def _pose_from_xyz(xyz: np.ndarray) -> np.ndarray:
+        pose = np.eye(4, dtype=np.float32)
+        pose[:3, 3] = np.asarray(xyz, dtype=np.float32)
+        return pose
+
+    def _decode_action_int(self, action_int: int) -> Tuple[int, int, bool]:
+        pass_id = self.board_size * self.board_size
+        if int(action_int) == pass_id:
+            return -1, -1, True
+        row = int(action_int // self.board_size)
+        col = int(action_int % self.board_size)
+        return row, col, False
+
+    def _player_channel(self, player_id: int) -> int:
+        return 1 if int(player_id) == SELF else 2
+
+    def _choose_random_legal_action(self, exclude_pass: bool = True) -> Optional[int]:
+        legal_actions = self._logic.legal_actions()
+        if exclude_pass:
+            pass_id = self.board_size * self.board_size
+            legal_actions = [a for a in legal_actions if int(a) != pass_id]
+        if not legal_actions:
+            return None
+        return int(self._rng.choice(np.asarray(legal_actions, dtype=np.int32)))
+
+    def _reserve_next_stone(self, player_id: int) -> Optional[int]:
+        pool = self._available_stones[int(player_id)]
+        if len(pool) == 0:
+            return None
+        return int(pool.pop(0))
+
+    def _release_stone(self, player_id: int, stone_idx: int) -> None:
+        pool = self._available_stones[int(player_id)]
+        if int(stone_idx) not in pool:
+            pool.append(int(stone_idx))
+        self._rs_env.hide_stone(int(stone_idx))
+
+    def _place_stone_at_intersection(self, stone_idx: int, row: int, col: int) -> None:
+        xyz = self._intersection_xyz[int(row), int(col)].copy()
+        self._rs_env.set_stone_pose(stone_idx=int(stone_idx), pos=xyz)
+
+    def _sync_captures(self, prev_board: np.ndarray, new_board: np.ndarray) -> None:
+        for player_id in (SELF, OPPONENT):
+            channel = self._player_channel(player_id)
+            removed = np.logical_and(
+                prev_board[:, :, channel].astype(bool),
+                np.logical_not(new_board[:, :, channel].astype(bool)),
+            )
+            removed_rc = np.transpose(np.nonzero(removed))
+            for row, col in removed_rc:
+                key = (int(player_id), int(row), int(col))
+                stone_idx = self._stone_assignments.pop(key, None)
+                if stone_idx is not None:
+                    self._release_stone(player_id=player_id, stone_idx=int(stone_idx))
+
+    def _apply_single_player_move(
+        self,
+        player_id: int,
+        action_int: int,
+        use_active_white_stone: bool = False,
+    ) -> bool:
+        row, col, is_pass = self._decode_action_int(action_int)
+        prev_board = self._logic.get_board_state().astype(np.float32)
+        valid = self._logic.apply(player=player_id, action_int=action_int)
+        if not valid:
+            return False
+        new_board = self._logic.get_board_state().astype(np.float32)
+        self._sync_captures(prev_board=prev_board, new_board=new_board)
+
+        if not is_pass:
+            if use_active_white_stone and (self._active_white_stone_idx is not None):
+                stone_idx = int(self._active_white_stone_idx)
+            else:
+                stone_idx = self._reserve_next_stone(player_id=player_id)
+                if stone_idx is None:
+                    return False
+            self._place_stone_at_intersection(stone_idx=stone_idx, row=row, col=col)
+            self._stone_assignments[(int(player_id), int(row), int(col))] = int(stone_idx)
+            if use_active_white_stone:
+                self._active_white_stone_idx = None
+
+        self._rs_env.sim.forward()
+        return True
+
+    def _apply_go_action(self, action_int: int, apply_opponent: Optional[bool] = None) -> bool:
+        if apply_opponent is None:
+            apply_opponent = self.enable_opponent_moves
+
+        valid = self._apply_single_player_move(
+            player_id=SELF,
+            action_int=int(action_int),
+            use_active_white_stone=True,
+        )
+        if not valid:
+            return False
+
+        if bool(apply_opponent) and (not self._logic.is_game_over):
+            opp_action = self._choose_random_legal_action(exclude_pass=False)
+            if opp_action is not None:
+                self._apply_single_player_move(
+                    player_id=OPPONENT,
+                    action_int=int(opp_action),
+                    use_active_white_stone=False,
+                )
+        return True
+
+    def _spawn_active_stone(self) -> None:
+        if self._active_white_stone_idx is not None:
+            return
+        stone_idx = self._reserve_next_stone(player_id=SELF)
+        if stone_idx is None:
+            self._active_white_stone_idx = None
+            return
+        self._active_white_stone_idx = int(stone_idx)
+        spawn_xyz = self._source_xyz.copy()
+        self._rs_env.set_stone_pose(stone_idx=self._active_white_stone_idx, pos=spawn_xyz)
+        self._rs_env.sim.forward()
+
+    def seed_random_opening(self, opening_moves: int) -> int:
+        opening_moves = max(0, int(opening_moves))
+        applied = 0
+        for _ in range(opening_moves):
+            if self._logic.is_game_over:
+                break
+            action_int = self._choose_random_legal_action(exclude_pass=True)
+            if action_int is None:
+                break
+            ok = self._apply_single_player_move(
+                player_id=SELF,
+                action_int=int(action_int),
+                use_active_white_stone=False,
+            )
+            if not ok:
+                break
+            applied += 1
+            if self.opening_with_opponent and (not self._logic.is_game_over):
+                opp_action = self._choose_random_legal_action(exclude_pass=False)
+                if opp_action is not None:
+                    self._apply_single_player_move(
+                        player_id=OPPONENT,
+                        action_int=int(opp_action),
+                        use_active_white_stone=False,
+                    )
+        return applied
+
+    def _set_target_pose_from_rc(self, row: int, col: int) -> None:
+        target_xyz = self._intersection_xyz[row, col].copy()
+        self._target_pose = self._pose_from_xyz(target_xyz)
+        self._target_rc = (int(row), int(col))
+
+    def set_target_intersection(self, row: int, col: int) -> None:
+        if not (0 <= int(row) < self.board_size and 0 <= int(col) < self.board_size):
+            raise ValueError(f"target ({row}, {col}) outside board")
+        self._set_target_pose_from_rc(row=int(row), col=int(col))
+
+    def set_target_from_random_legal_move(self) -> Tuple[int, int]:
+        action_int = self._choose_random_legal_action(exclude_pass=True)
+        if action_int is None:
+            self.set_target_intersection(row=self.board_size // 2, col=self.board_size // 2)
+            return self._target_rc
+        row, col, _ = self._decode_action_int(action_int)
+        self.set_target_intersection(row=row, col=col)
+        return self._target_rc
+
+    def reset(self, options: Optional[GoResetOptions] = None):
+        if options is None and self._queued_reset_options is not None:
+            options = self._queued_reset_options
+            self._queued_reset_options = None
+        if options is None:
+            options = GoResetOptions()
+
+        self._rs_env.reset()
+        self._logic.reset()
+        self._intersection_xyz = self._rs_env.board_intersections_xyz.copy()
+        self._source_xyz = self._rs_env.source_stone_xyz.copy()
+        self._available_stones = {
+            SELF: self._rs_env.white_stone_indices,
+            OPPONENT: self._rs_env.black_stone_indices,
+        }
+        self._stone_assignments = {}
+        self._active_white_stone_idx = None
+        self._gripper_action = np.zeros((1,), dtype=np.float32)
+
+        self._step_count = 0
+        self._move_committed = False
+        self._success_step = None
+
+        self.seed_random_opening(options.opening_moves)
+        if options.target_row is not None and options.target_col is not None:
+            self.set_target_intersection(row=int(options.target_row), col=int(options.target_col))
+        else:
+            self.set_target_from_random_legal_move()
+        self._spawn_active_stone()
+        self._eef_trail = [self.get_eef_pose()[:3, 3].copy()]
+        return self.get_observation()
+
+    def queue_reset_options(self, options: GoResetOptions) -> None:
+        self._queued_reset_options = GoResetOptions(
+            opening_moves=int(options.opening_moves),
+            target_row=options.target_row,
+            target_col=options.target_col,
+        )
+
+    def _nearest_intersection(self, xy: np.ndarray) -> Tuple[int, int, float]:
+        flat_xy = self._intersection_xyz[:, :, :2].reshape(-1, 2)
+        dists = np.linalg.norm(flat_xy - xy.reshape(1, 2), axis=1)
+        flat_idx = int(np.argmin(dists))
+        row = flat_idx // self.board_size
+        col = flat_idx % self.board_size
+        return row, col, float(dists[flat_idx])
+
+    def _is_active_stone_grasped(self) -> bool:
+        if self._active_white_stone_idx is None:
+            return False
+        return bool(self._rs_env.check_stone_grasped(self._active_white_stone_idx))
+
+    def _build_low_level_action(self, action: np.ndarray) -> np.ndarray:
+        action = np.asarray(action, dtype=np.float32).reshape(-1)
+        arm_action = np.clip(action[:3], -1.0, 1.0)
+        self._gripper_action = np.array([np.clip(action[3], -1.0, 1.0)], dtype=np.float32)
+
+        delta_world = arm_action * self.action_scale
+        arm_controller = self._robot.part_controllers.get(self._arm_key, None)
+        input_ref_frame = getattr(arm_controller, "input_ref_frame", "world")
+        if str(input_ref_frame).lower() == "base":
+            # Convert world delta into base frame expected by default OSC controllers.
+            delta_cmd = np.asarray(self._robot.base_ori, dtype=np.float32).T.dot(delta_world)
+        else:
+            delta_cmd = delta_world
+
+        arm_vector = np.zeros((self._arm_dim,), dtype=np.float32)
+        scaled_xyz = delta_cmd / np.maximum(self._controller_xyz_max, 1e-6)
+        arm_vector[:3] = np.clip(scaled_xyz, -1.0, 1.0)
+        if self._arm_dim > 3:
+            arm_vector[3:] = 0.0
+
+        action_dict = OrderedDict()
+        action_dict[self._arm_key] = arm_vector
+        if (self._gripper_key is not None) and (self._gripper_dim > 0):
+            gripper_value = float(np.clip((2.0 * float(self._gripper_action[0])) - 1.0, -1.0, 1.0))
+            action_dict[self._gripper_key] = np.full((self._gripper_dim,), gripper_value, dtype=np.float32)
+        return self._robot.create_action_vector(action_dict)
+
+    def reached_target(self) -> bool:
+        eef_xy = self.get_eef_pose()[:2, 3]
+        tgt_xy = self._target_pose[:2, 3]
+        return bool(np.linalg.norm(eef_xy - tgt_xy) <= self.reach_xy_threshold)
+
+    def get_eef_pose(self) -> np.ndarray:
+        return self._rs_env.get_eef_pose().astype(np.float32)
+
+    def get_target_pose(self) -> np.ndarray:
+        return self._target_pose.copy()
+
+    def get_target_intersection(self) -> Tuple[int, int]:
+        return self._target_rc
+
+    def get_source_stone_pose(self) -> np.ndarray:
+        return self._pose_from_xyz(self._source_xyz.copy())
+
+    def get_board_origin_pose(self) -> np.ndarray:
+        center = self._intersection_xyz.mean(axis=(0, 1))
+        center[2] = self.table_top_z
+        return self._pose_from_xyz(center)
+
+    def get_board_xy_bounds(self) -> Tuple[np.ndarray, np.ndarray]:
+        flat_xy = self._intersection_xyz[:, :, :2].reshape(-1, 2)
+        return flat_xy.min(axis=0).astype(np.float32), flat_xy.max(axis=0).astype(np.float32)
+
+    def get_board_state(self) -> np.ndarray:
+        return self._logic.get_board_state().astype(np.float32)
+
+    def get_move_history(self) -> np.ndarray:
+        return self._logic.get_move_history().astype(np.float32)
+
+    def get_state(self) -> Dict[str, np.ndarray]:
+        board_flat = self.get_board_state().reshape(-1)
+        eef_xyz = self.get_eef_pose()[:3, 3]
+        tgt_xyz = self._target_pose[:3, 3]
+        state = np.concatenate(
+            [
+                board_flat,
+                eef_xyz,
+                tgt_xyz,
+                np.array([float(self._move_committed), float(self._step_count)], dtype=np.float32),
+            ],
+            axis=0,
+        ).astype(np.float32)
+        return {"states": state}
+
+    def get_observation(self) -> Dict[str, np.ndarray]:
+        eef_pose = self.get_eef_pose()
+        obs: Dict[str, np.ndarray] = {
+            "board_state": self.get_board_state(),
+            "eef_pos": eef_pose[:3, 3].copy().astype(np.float32),
+            "target_pos": self._target_pose[:3, 3].copy().astype(np.float32),
+            "move_history": self.get_move_history(),
+        }
+        if self.include_image_obs:
+            image = self.render(mode="rgb_array", height=self.camera_height, width=self.camera_width)
+            if self.render_eef_overlay:
+                image = self._overlay_debug_markers(image=image)
+            obs["agentview_image"] = image
+        return obs
+
+    def is_success(self) -> Dict[str, bool]:
+        return {"task": bool(self._move_committed)}
+
+    def step(self, action: np.ndarray):
+        action = np.asarray(action, dtype=np.float32).reshape(-1)
+        if action.shape[0] < 4:
+            raise ValueError("GoRobosuiteBenchmarkEnv expects action shape (4,)")
+
+        low_level_action = self._build_low_level_action(action=action)
+        self._rs_env.step(low_level_action)
+
+        self._eef_trail.append(self.get_eef_pose()[:3, 3].copy())
+        if len(self._eef_trail) > self.eef_overlay_trail + 1:
+            self._eef_trail = self._eef_trail[-(self.eef_overlay_trail + 1) :]
+
+        if (not self._move_committed) and (self._active_white_stone_idx is not None):
+            stone_xyz = self._rs_env.get_stone_pos(self._active_white_stone_idx)
+            row, col, dist = self._nearest_intersection(stone_xyz[:2])
+            is_released = not self._is_active_stone_grasped()
+            near_target = ((int(row), int(col)) == self._target_rc)
+            if (
+                (dist <= self.place_xy_threshold)
+                and (abs(float(stone_xyz[2] - self._intersection_xyz[row, col, 2])) <= self.place_z_threshold)
+                and near_target
+                and is_released
+            ):
+                action_int = row * self.board_size + col
+                self._move_committed = self._apply_go_action(action_int=int(action_int))
+                if self._move_committed and (self._success_step is None):
+                    self._success_step = int(self._step_count)
+
+        self._step_count += 1
+        success_terminal = False
+        if self._move_committed:
+            if self.success_hold_steps <= 0:
+                success_terminal = True
+            elif self._success_step is not None:
+                success_terminal = (self._step_count - self._success_step) >= self.success_hold_steps
+
+        done = bool(success_terminal or self._logic.is_game_over or (self._step_count >= self.max_steps))
+        reward = float(self._move_committed)
+        obs = self.get_observation()
+        info = {
+            "target_row": int(self._target_rc[0]),
+            "target_col": int(self._target_rc[1]),
+            "move_committed": bool(self._move_committed),
+            "step_count": int(self._step_count),
+            "active_stone": (
+                int(self._active_white_stone_idx) if self._active_white_stone_idx is not None else None
+            ),
+        }
+        return obs, reward, done, info
+
+    def render(
+        self,
+        mode: str = "rgb_array",
+        height: int = 256,
+        width: int = 256,
+        camera_name: Optional[str] = None,
+    ):
+        if mode == "rgb_array":
+            return self._rs_env.render_rgb(
+                height=int(height),
+                width=int(width),
+                camera_name=camera_name,
+            )
+        if mode == "human":
+            return None
+        raise ValueError(f"unsupported render mode: {mode}")
+
+    def _xy_to_image_rc(self, xy: np.ndarray, height: int, width: int) -> Tuple[int, int]:
+        span_xy = self.workspace_high[:2] - self.workspace_low[:2]
+        norm_xy = (xy - self.workspace_low[:2]) / np.maximum(span_xy, 1e-6)
+        col = int(np.clip(round(norm_xy[0] * (width - 1)), 0, width - 1))
+        row = int(np.clip(round((1.0 - norm_xy[1]) * (height - 1)), 0, height - 1))
+        return row, col
+
+    @staticmethod
+    def _draw_disk(image: np.ndarray, row: int, col: int, radius: int, color: np.ndarray) -> None:
+        h, w = image.shape[:2]
+        r0 = max(0, row - radius)
+        r1 = min(h - 1, row + radius)
+        c0 = max(0, col - radius)
+        c1 = min(w - 1, col + radius)
+        for rr in range(r0, r1 + 1):
+            for cc in range(c0, c1 + 1):
+                if (rr - row) * (rr - row) + (cc - col) * (cc - col) <= radius * radius:
+                    image[rr, cc] = color
+
+    def _overlay_debug_markers(self, image: np.ndarray) -> np.ndarray:
+        rendered = image.copy()
+        h, w = rendered.shape[:2]
+        target_rc = self._xy_to_image_rc(self._target_pose[:2, 3], h, w)
+        self._draw_disk(
+            rendered,
+            row=target_rc[0],
+            col=target_rc[1],
+            radius=2,
+            color=np.array([20, 130, 255], dtype=np.uint8),
+        )
+
+        for idx, xyz in enumerate(self._eef_trail):
+            row, col = self._xy_to_image_rc(xyz[:2], h, w)
+            alpha = float(idx + 1) / float(max(len(self._eef_trail), 1))
+            color = np.array(
+                [int(220 * alpha), int(40 + 180 * alpha), int(20 + 20 * alpha)],
+                dtype=np.uint8,
+            )
+            self._draw_disk(rendered, row=row, col=col, radius=1, color=color)
+
+        eef_rc = self._xy_to_image_rc(self.get_eef_pose()[:2, 3], h, w)
+        self._draw_disk(
+            rendered,
+            row=eef_rc[0],
+            col=eef_rc[1],
+            radius=2,
+            color=np.array([255, 70, 40], dtype=np.uint8),
+        )
+        return rendered
+
+    def serialize(self) -> Dict[str, object]:
+        return {
+            "env_name": self.environment_name,
+            "env_type": "robosuite_go_benchmark",
+            "board_size": self.board_size,
+            "action_shape": [4],
+            "action_scale": self.action_scale,
+            "press_height": self.press_height,
+            "reach_xy_threshold": self.reach_xy_threshold,
+            "success_hold_steps": self.success_hold_steps,
+            "enable_opponent_moves": self.enable_opponent_moves,
+            "opening_with_opponent": self.opening_with_opponent,
+            "render_eef_overlay": self.render_eef_overlay,
+            "eef_overlay_trail": self.eef_overlay_trail,
+            "camera_height": self.camera_height,
+            "camera_width": self.camera_width,
+            "robot": self._robot.name,
+        }
+
+    def sample_random_action(self) -> np.ndarray:
+        return self._rng.uniform(low=-1.0, high=1.0, size=(4,)).astype(np.float32)
+
+    def close(self) -> None:
+        self._rs_env.close()

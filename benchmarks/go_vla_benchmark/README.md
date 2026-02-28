@@ -1,12 +1,14 @@
 # Go + MimicGen Benchmark (OpenVLA Prep)
 
-This benchmark is a standalone workspace for creating a future OpenVLA fine-tuning dataset from the DeepMind `go_7x7` + Jaco arm simulator.
+This benchmark is a standalone workspace for creating a future OpenVLA fine-tuning dataset from Go manipulation scenes.
 
 It is implemented entirely under `benchmarks/go_vla_benchmark` so dependency packages stay untouched.
 
 ## What It Includes
 
-- A wrapper around DeepMind's Go simulator with a stable control API (`GoJacoBenchmarkEnv`)
+- Backend-selectable Go wrappers:
+  - DeepMind `physics_planning_games` (`GoJacoBenchmarkEnv`)
+  - robosuite rigid-body 5x5 task (`GoRobosuiteBenchmarkEnv`)
 - A custom MimicGen interface (`MG_GoJacoSingleMove`) for extracting `datagen_info`
 - Source demo collection script (scripted control for initial MimicGen seeds)
 - MimicGen augmentation script using `mimicgen.datagen.DataGenerator`
@@ -15,7 +17,9 @@ It is implemented entirely under `benchmarks/go_vla_benchmark` so dependency pac
 
 ## Folder Layout
 
-- `go_vla_benchmark/go_env.py`: simulator wrapper and board-state randomization
+- `go_vla_benchmark/go_env.py`: DeepMind simulator wrapper
+- `go_vla_benchmark/robosuite_go_env.py`: robosuite rigid-body 5x5 wrapper
+- `go_vla_benchmark/env_factory.py`: backend selection by `--environment-name`
 - `go_vla_benchmark/mimicgen_interface.py`: MimicGen environment interface (registered via import)
 - `go_vla_benchmark/collect.py`: source demo collection pipeline
 - `go_vla_benchmark/generate.py`: MimicGen augmentation pipeline
@@ -25,8 +29,8 @@ It is implemented entirely under `benchmarks/go_vla_benchmark` so dependency pac
 ## Prerequisites
 
 - Python `3.10` or `3.11` (validated)
-- `gnugo` installed and discoverable
-- MuJoCo-compatible rendering stack for `dm_control`
+- MuJoCo-compatible rendering stack
+- `gnugo` only if you use the DeepMind Go backend
 
 Install benchmark dependencies:
 
@@ -36,7 +40,7 @@ pip install --no-deps -e "git+https://github.com/ARISE-Initiative/robomimic.git@
 pip install -e mimicgen
 ```
 
-For this Go benchmark, full `robosuite` installation is not required. A local compatibility shim is used for the small transform API that MimicGen needs.
+For the robosuite backend, use the local `./robosuite` checkout (added to `PYTHONPATH` by benchmark scripts).
 
 If you hit `Failed building wheel for egl_probe` with a CMake compatibility error, force CMake 3.x and retry:
 
@@ -49,7 +53,7 @@ pip install --no-deps -e "git+https://github.com/ARISE-Initiative/robomimic.git@
 Set `PYTHONPATH` so local repos are imported:
 
 ```bash
-export PYTHONPATH="$PWD/deepmind-research:$PWD/mimicgen:$PWD/benchmarks/go_vla_benchmark:$PYTHONPATH"
+export PYTHONPATH="$PWD/deepmind-research:$PWD/mimicgen:$PWD/robosuite:$PWD/benchmarks/go_vla_benchmark:$PYTHONPATH"
 ```
 
 Run setup doctor (fails with non-zero exit if generation is not ready):
@@ -58,7 +62,7 @@ Run setup doctor (fails with non-zero exit if generation is not ready):
 python benchmarks/go_vla_benchmark/scripts/check_setup.py --strict
 ```
 
-If `gnugo` is not on `PATH`, pass `--gnugo-path /abs/path/to/gnugo` (or set `GNUGO_PATH`).
+If using the DeepMind backend and `gnugo` is not on `PATH`, pass `--gnugo-path /abs/path/to/gnugo` (or set `GNUGO_PATH`).
 
 ## Workflow
 
@@ -79,7 +83,7 @@ python benchmarks/go_vla_benchmark/scripts/run_go_viewer.py --env go_5x5_rigid_b
 ```bash
 python benchmarks/go_vla_benchmark/scripts/collect_source_demos.py \
   --output benchmarks/go_vla_benchmark/data/source_go.hdf5 \
-  --environment-name go_5x5_rigid_bodies \
+  --environment-name robosuite_go_5x5_rigid_bodies \
   --num-demos 40 \
   --camera-size 512 \
   --opening-min 0 \
@@ -105,7 +109,8 @@ This creates MimicGen-compatible source trajectories with:
 
 The `--camera-size` (or `--camera-height` + `--camera-width`) flag controls native simulator render resolution written into HDF5 frames (for example `--camera-size 512` for native `512x512`). The `--controller-divisor`, `--success-hold-steps`, `--detour-steps`, `--detour-radius`, `--approach-steps`, `--press-steps`, `--retreat-steps`, `--side-transfer-steps`, and `--side-margin` flags control trajectory length and visible motion in the HDF5 itself (not just video playback speed). By default, rendered images include an EEF + target overlay; disable it with `--no-eef-overlay`.
 
-For OpenVLA-style manipulation data, the default now disables opponent responses during scripted moves (to avoid random extra stones appearing mid-trajectory). Re-enable with `--enable-opponent-moves`. The default also shows a carried-stone visualization that follows the gripper before commit; disable with `--no-carried-stone`.
+For OpenVLA-style manipulation data, the default disables opponent responses during scripted moves (to avoid random extra stones appearing mid-trajectory). Re-enable with `--enable-opponent-moves`.
+For robosuite backend robot swaps, pass `--robot <RobotName>` (for example `--robot UR5e`).
 
 ## Visualize What Is In HDF5 (Exact `obs/agentview_image`)
 
@@ -132,7 +137,7 @@ python benchmarks/go_vla_benchmark/scripts/generate_augmented_demos.py \
   --source benchmarks/go_vla_benchmark/data/source_go.hdf5 \
   --output benchmarks/go_vla_benchmark/data/augmented_go.hdf5 \
   --task-config benchmarks/go_vla_benchmark/configs/go_single_move_task.json \
-  --environment-name go_5x5_rigid_bodies \
+  --environment-name robosuite_go_5x5_rigid_bodies \
   --num-demos 200 \
   --max-attempts 500 \
   --camera-size 512 \

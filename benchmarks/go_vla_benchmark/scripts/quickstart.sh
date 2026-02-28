@@ -12,7 +12,7 @@ python -m pip install --no-deps -e "git+https://github.com/ARISE-Initiative/robo
 python -m pip install -e "$ROOT_DIR/mimicgen"
 
 action_python() {
-  PYTHONPATH="$ROOT_DIR/deepmind-research:$ROOT_DIR/mimicgen:$BENCH_DIR:${PYTHONPATH:-}" \
+  PYTHONPATH="$ROOT_DIR/deepmind-research:$ROOT_DIR/mimicgen:$ROOT_DIR/robosuite:$BENCH_DIR:${PYTHONPATH:-}" \
     python "$@"
 }
 

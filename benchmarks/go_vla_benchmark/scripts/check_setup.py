@@ -93,7 +93,7 @@ def main() -> None:
             "Install benchmark deps: pip install -r benchmarks/go_vla_benchmark/requirements.txt",
             "Install MimicGen: pip install -e mimicgen",
             "Install robomimic (no deps): pip install --no-deps -e git+https://github.com/ARISE-Initiative/robomimic.git@d0b37cf214bd24fb590d182edb6384333f67b661#egg=robomimic",
-            "robosuite is optional for this Go benchmark (a local compatibility shim is used).",
+            "robosuite is optional for dm_control backend, but required for robosuite_go_5x5_rigid_bodies.",
             "Ensure gnugo is installed and available on PATH (or pass --gnugo-path).",
         ],
     }

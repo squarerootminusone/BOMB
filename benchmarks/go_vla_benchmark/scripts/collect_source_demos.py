@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
         "--environment-name",
         type=str,
         default="go_7x7",
-        help="board game environment name (for example: go_7x7, go_5x5_rigid_bodies)",
+        help="environment name (for example: go_7x7, go_5x5_rigid_bodies, robosuite_go_5x5_rigid_bodies)",
     )
     parser.add_argument("--num-demos", type=int, default=40, help="number of successful source demos")
     parser.add_argument("--seed", type=int, default=0)
@@ -48,6 +48,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--camera-height", type=int, default=84)
     parser.add_argument("--camera-width", type=int, default=84)
     parser.add_argument("--gnugo-path", type=str, default=None, help="optional path to gnugo binary")
+    parser.add_argument("--robot", type=str, default="Panda", help="robot name for robosuite backend")
+    parser.add_argument(
+        "--gripper-types",
+        type=str,
+        default="default",
+        help="gripper type for robosuite backend",
+    )
     parser.add_argument("--action-scale", type=float, default=0.03, help="eef delta scale per step")
     parser.add_argument(
         "--success-hold-steps",
@@ -159,6 +166,8 @@ def main() -> None:
         render_carried_stone=not args.no_carried_stone,
         render_eef_overlay=not args.no_eef_overlay,
         eef_overlay_trail=args.eef_overlay_trail,
+        robot=args.robot,
+        gripper_types=args.gripper_types,
     )
     print(json.dumps(stats, indent=2))
 

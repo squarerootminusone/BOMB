@@ -16,6 +16,7 @@ def bootstrap_pythonpath(repo_root: Path) -> None:
     candidates = [
         repo_root / "deepmind-research",
         repo_root / "mimicgen",
+        repo_root / "robosuite",
         repo_root / "benchmarks" / "go_vla_benchmark",
     ]
     for candidate in candidates:

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 
+from .common import GoResetOptions
 from .dataset_io import EpisodeRecord, write_dataset
-from .go_env import GoJacoBenchmarkEnv, GoResetOptions
+from .env_factory import create_benchmark_env
 from .mimicgen_interface import MG_GoJacoSingleMove
 
 
@@ -17,7 +18,7 @@ def _stack_obs(obs_seq: List[Dict[str, np.ndarray]]) -> Dict[str, np.ndarray]:
 
 
 def _append_transition(
-    env: GoJacoBenchmarkEnv,
+    env: Any,
     env_interface: MG_GoJacoSingleMove,
     action: np.ndarray,
     states: List[np.ndarray],
@@ -40,7 +41,7 @@ def _append_transition(
 
 
 def _drive_to_pose(
-    env: GoJacoBenchmarkEnv,
+    env: Any,
     env_interface: MG_GoJacoSingleMove,
     goal_xyz: np.ndarray,
     num_steps: int,
@@ -76,7 +77,7 @@ def _drive_to_pose(
 
 
 def _compute_side_hover_xyz(
-    env: GoJacoBenchmarkEnv,
+    env: Any,
     target_xyz: np.ndarray,
     side_margin: float,
 ) -> np.ndarray:
@@ -113,7 +114,7 @@ def _compute_side_hover_xyz(
 
 
 def _collect_single_episode(
-    env: GoJacoBenchmarkEnv,
+    env: Any,
     env_interface: MG_GoJacoSingleMove,
     controller_divisor: float,
     detour_steps: int,
@@ -133,6 +134,11 @@ def _collect_single_episode(
     actions: List[np.ndarray] = []
 
     target_xyz = env.get_target_pose()[:3, 3]
+    source_xyz = (
+        env.get_source_stone_pose()[:3, 3]
+        if hasattr(env, "get_source_stone_pose")
+        else target_xyz.copy()
+    )
     hover_xyz = target_xyz.copy()
     hover_xyz[2] = max(env.hover_height * 0.7, env.press_height + 0.05)
     side_hover_xyz = _compute_side_hover_xyz(
@@ -143,6 +149,11 @@ def _collect_single_episode(
 
     press_xyz = target_xyz.copy()
     press_xyz[2] = max(0.0, env.press_height - 0.015)
+
+    source_hover_xyz = source_xyz.copy()
+    source_hover_xyz[2] = max(env.hover_height * 0.65, env.press_height + 0.05)
+    source_press_xyz = source_xyz.copy()
+    source_press_xyz[2] = max(env.press_height + 0.002, source_xyz[2] - 0.006)
 
     # Optional phase 0: move to a random detour waypoint to create longer / larger motions.
     if detour_steps > 0 and detour_radius > 0.0:
@@ -173,6 +184,66 @@ def _collect_single_episode(
             goal_xyz=side_hover_xyz,
             num_steps=side_transfer_steps,
             gripper=0.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+
+    # Physical-pick phase (robosuite backend): approach source stone and grasp it
+    # before transfer to the board target.
+    if hasattr(env, "get_source_stone_pose"):
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=source_hover_xyz,
+            num_steps=max(6, approach_steps // 2),
+            gripper=0.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=source_press_xyz,
+            num_steps=max(6, press_steps),
+            gripper=0.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=source_press_xyz,
+            num_steps=max(5, press_steps // 2),
+            gripper=1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=source_hover_xyz,
+            num_steps=max(6, retreat_steps),
+            gripper=1.0,
             controller_divisor=controller_divisor,
             states=states,
             observations=observations,
@@ -304,13 +375,15 @@ def collect_source_demonstrations(
     render_carried_stone: bool = True,
     render_eef_overlay: bool = True,
     eef_overlay_trail: int = 10,
+    robot: str = "Panda",
+    gripper_types: str = "default",
 ) -> Dict[str, object]:
     """Collect source demonstrations for MimicGen using scripted control."""
     if num_demos <= 0:
         raise ValueError("num_demos must be > 0")
 
     rng = np.random.RandomState(seed)
-    env = GoJacoBenchmarkEnv(
+    env = create_benchmark_env(
         seed=seed,
         environment_name=environment_name,
         include_image_obs=include_image_obs,
@@ -325,6 +398,8 @@ def collect_source_demonstrations(
         render_carried_stone=render_carried_stone,
         render_eef_overlay=render_eef_overlay,
         eef_overlay_trail=eef_overlay_trail,
+        robot=robot,
+        gripper_types=gripper_types,
     )
     env_interface = MG_GoJacoSingleMove(env=env)
 

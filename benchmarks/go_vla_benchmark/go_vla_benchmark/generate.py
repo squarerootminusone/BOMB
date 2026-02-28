@@ -13,8 +13,9 @@ ensure_robosuite_compat()
 from mimicgen.datagen.data_generator import DataGenerator
 
 from .config import GenerationSettings, load_task_config
+from .common import GoResetOptions
 from .dataset_io import EpisodeRecord, read_demo_keys, write_dataset
-from .go_env import GoJacoBenchmarkEnv, GoResetOptions
+from .env_factory import create_benchmark_env
 from .mimicgen_interface import MG_GoJacoSingleMove
 
 
@@ -85,6 +86,8 @@ def generate_augmented_demonstrations(
     render_carried_stone: bool = True,
     render_eef_overlay: bool = True,
     eef_overlay_trail: int = 10,
+    robot: str = "Panda",
+    gripper_types: str = "default",
 ) -> Dict[str, object]:
     """Generate new trajectories via MimicGen using Go source demonstrations."""
     task_spec, default_settings, raw_cfg = load_task_config(task_config_path)
@@ -108,7 +111,7 @@ def generate_augmented_demonstrations(
 
     rng = np.random.RandomState(settings.seed)
 
-    env = GoJacoBenchmarkEnv(
+    env = create_benchmark_env(
         seed=settings.seed,
         environment_name=environment_name,
         include_image_obs=include_image_obs,
@@ -123,6 +126,8 @@ def generate_augmented_demonstrations(
         render_carried_stone=render_carried_stone,
         render_eef_overlay=render_eef_overlay,
         eef_overlay_trail=eef_overlay_trail,
+        robot=robot,
+        gripper_types=gripper_types,
     )
     env_interface = MG_GoJacoSingleMove(env=env)
 

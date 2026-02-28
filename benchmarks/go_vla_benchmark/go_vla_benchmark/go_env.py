@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -13,14 +12,8 @@ from physics_planning_games.board_games import go_logic
 from physics_planning_games.board_games import jaco_arm_board_game
 from physics_planning_games.board_games._internal import pieces as board_pieces
 
+from .common import GoResetOptions
 from .runtime import configure_gnugo_path
-
-
-@dataclass
-class GoResetOptions:
-    opening_moves: int = 0
-    target_row: Optional[int] = None
-    target_col: Optional[int] = None
 
 
 class GoJacoBenchmarkEnv:
