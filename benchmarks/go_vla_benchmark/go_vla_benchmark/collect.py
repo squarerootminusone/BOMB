@@ -409,6 +409,10 @@ def collect_source_demonstrations(
 
     while (len(episodes) < num_demos) and (attempts < max_attempts):
         attempts += 1
+        print(
+            f"[collect] attempt {attempts}/{max_attempts} demos={len(episodes)}/{num_demos}",
+            flush=True,
+        )
 
         opening_moves = int(rng.randint(opening_moves_min, opening_moves_max + 1))
         env.reset(options=GoResetOptions(opening_moves=opening_moves))
@@ -429,6 +433,13 @@ def collect_source_demonstrations(
 
         if success:
             episodes.append(episode)
+            print(
+                f"[collect] success demos={len(episodes)}/{num_demos} "
+                f"steps={int(episode.actions.shape[0])}",
+                flush=True,
+            )
+        else:
+            print("[collect] attempt failed", flush=True)
 
     if len(episodes) < num_demos:
         raise RuntimeError(

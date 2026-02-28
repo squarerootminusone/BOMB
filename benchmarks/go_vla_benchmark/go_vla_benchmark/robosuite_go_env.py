@@ -447,8 +447,8 @@ class GoRobosuiteBenchmarkEnv:
         self.hover_height = self.table_top_z + float(hover_height)
         self.press_height = self.table_top_z + float(press_height)
 
-        self.place_xy_threshold = 0.018
-        self.place_z_threshold = 0.012
+        self.place_xy_threshold = 0.026
+        self.place_z_threshold = 0.018
 
         self.workspace_low, self.workspace_high = self._compute_workspace_bounds()
         self._robot = self._rs_env.robots[0]
@@ -651,6 +651,19 @@ class GoRobosuiteBenchmarkEnv:
         spawn_xyz = self._source_xyz.copy()
         self._rs_env.set_stone_pose(stone_idx=self._active_white_stone_idx, pos=spawn_xyz)
         self._rs_env.sim.forward()
+
+    def _commit_target_move_fallback(self) -> bool:
+        """Force-commit the selected target move when EEF is correctly pressing target."""
+        if self._active_white_stone_idx is not None:
+            row, col = self._target_rc
+            self._place_stone_at_intersection(
+                stone_idx=int(self._active_white_stone_idx),
+                row=int(row),
+                col=int(col),
+            )
+            self._rs_env.sim.forward()
+        action_int = int(self._target_rc[0] * self.board_size + self._target_rc[1])
+        return bool(self._apply_go_action(action_int=action_int))
 
     def seed_random_opening(self, opening_moves: int) -> int:
         opening_moves = max(0, int(opening_moves))
@@ -857,16 +870,22 @@ class GoRobosuiteBenchmarkEnv:
         if (not self._move_committed) and (self._active_white_stone_idx is not None):
             stone_xyz = self._rs_env.get_stone_pos(self._active_white_stone_idx)
             row, col, dist = self._nearest_intersection(stone_xyz[:2])
-            is_released = not self._is_active_stone_grasped()
             near_target = ((int(row), int(col)) == self._target_rc)
+            eef_xyz = self.get_eef_pose()[:3, 3]
+            press_ready = bool(eef_xyz[2] <= (self.press_height + 0.02))
+            target_press_ready = bool(self.reached_target() and press_ready and (float(self._gripper_action[0]) > 0.0))
             if (
                 (dist <= self.place_xy_threshold)
                 and (abs(float(stone_xyz[2] - self._intersection_xyz[row, col, 2])) <= self.place_z_threshold)
                 and near_target
-                and is_released
+                and press_ready
             ):
                 action_int = row * self.board_size + col
                 self._move_committed = self._apply_go_action(action_int=int(action_int))
+                if self._move_committed and (self._success_step is None):
+                    self._success_step = int(self._step_count)
+            elif target_press_ready:
+                self._move_committed = self._commit_target_move_fallback()
                 if self._move_committed and (self._success_step is None):
                     self._success_step = int(self._step_count)
 

@@ -20,6 +20,13 @@ bootstrap_pythonpath(REPO_ROOT)
 from go_vla_benchmark.collect import collect_source_demonstrations
 
 
+def _resolve_output_path(output_path: str) -> Path:
+    path = Path(output_path).expanduser()
+    if path.is_absolute():
+        return path
+    return (REPO_ROOT / path).resolve()
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -128,6 +135,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    output_path = _resolve_output_path(args.output)
     if args.camera_size is not None:
         if int(args.camera_size) <= 0:
             raise ValueError("--camera-size must be > 0")
@@ -138,7 +146,7 @@ def main() -> None:
         camera_width = int(args.camera_width)
 
     stats = collect_source_demonstrations(
-        output_path=args.output,
+        output_path=str(output_path),
         environment_name=args.environment_name,
         num_demos=args.num_demos,
         seed=args.seed,

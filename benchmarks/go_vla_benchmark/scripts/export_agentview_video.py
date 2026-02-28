@@ -12,11 +12,82 @@ import h5py
 import imageio
 import numpy as np
 
+THIS_FILE = Path(__file__).resolve()
+REPO_ROOT = THIS_FILE.parents[3]
+
 
 def _sorted_demo_keys(data_group: h5py.Group) -> List[str]:
     demos = list(data_group.keys())
     order = np.argsort([int(x.split("_")[1]) for x in demos])
     return [demos[i] for i in order]
+
+
+def _dedupe_paths(paths: List[Path]) -> List[Path]:
+    deduped: List[Path] = []
+    seen = set()
+    for path in paths:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        deduped.append(resolved)
+    return deduped
+
+
+def _resolve_dataset_path(dataset: str) -> Path:
+    requested = Path(dataset).expanduser()
+    if requested.is_absolute():
+        if requested.is_file():
+            return requested.resolve()
+        raise FileNotFoundError(f"dataset not found at absolute path: {requested}")
+
+    direct_candidates = _dedupe_paths(
+        [
+            Path.cwd() / requested,
+            REPO_ROOT / requested,
+        ]
+    )
+    for candidate in direct_candidates:
+        if candidate.is_file():
+            return candidate
+
+    search_roots = [
+        REPO_ROOT / "benchmarks" / "go_vla_benchmark" / "data",
+        REPO_ROOT / "benchmarks",
+    ]
+    discovered: List[Path] = []
+    for root in search_roots:
+        if root.exists():
+            discovered.extend(root.rglob(requested.name))
+    discovered = _dedupe_paths([path for path in discovered if path.is_file()])
+
+    if len(discovered) == 1:
+        return discovered[0]
+
+    tried_lines = "\n".join(f"  - {path}" for path in direct_candidates)
+    if discovered:
+        found_lines = "\n".join(f"  - {path}" for path in discovered)
+        raise FileNotFoundError(
+            f"dataset '{dataset}' was not found at expected locations.\n"
+            f"Tried:\n{tried_lines}\n"
+            f"Found multiple files with the same name:\n{found_lines}\n"
+            "Pass an absolute --dataset path to disambiguate."
+        )
+
+    raise FileNotFoundError(
+        f"dataset '{dataset}' was not found.\n"
+        f"Tried:\n{tried_lines}\n"
+        "Tip: pass an absolute --dataset path from the collector output."
+    )
+
+
+def _resolve_output_path(output: str | None, dataset_path: Path) -> Path:
+    if output is None:
+        return dataset_path.with_name(dataset_path.stem + "_agentview.mp4")
+    output_path = Path(output).expanduser()
+    if output_path.is_absolute():
+        return output_path.resolve()
+    return (REPO_ROOT / output_path).resolve()
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,8 +127,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    dataset_path = Path(args.dataset)
-    output_path = Path(args.output) if args.output else dataset_path.with_name(dataset_path.stem + "_agentview.mp4")
+    dataset_path = _resolve_dataset_path(args.dataset)
+    output_path = _resolve_output_path(args.output, dataset_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     stride = max(1, int(args.stride))
@@ -92,7 +163,9 @@ def main() -> None:
                 raise ValueError("--camera-size must be > 0")
             if (frame_h != frame_w) or (frame_h != expected):
                 raise RuntimeError(
-                    f"dataset frames are {frame_h}x{frame_w}, expected square {expected}x{expected}"
+                    f"dataset frames are {frame_h}x{frame_w}. "
+                    f"--camera-size validates native frame size and must match {frame_h} "
+                    f"(or omit --camera-size)."
                 )
         blank = np.zeros((frame_h, frame_w, 3), dtype=np.uint8)
 
