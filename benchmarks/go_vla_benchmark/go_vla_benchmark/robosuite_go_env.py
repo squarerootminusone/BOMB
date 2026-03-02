@@ -468,7 +468,7 @@ class GoRobosuiteBenchmarkEnv:
         hover_height: float = 0.16,
         press_height: float = 0.03,
         reach_xy_threshold: float = 0.03,
-        max_steps: int = 220,
+        max_steps: int = 500,
         success_hold_steps: int = 0,
         drive_physical_arm: bool = True,
         enable_opponent_moves: bool = False,
