@@ -151,9 +151,9 @@ def _collect_single_episode(
     press_xyz[2] = max(0.0, env.press_height - 0.015)
 
     source_hover_xyz = source_xyz.copy()
-    source_hover_xyz[2] = max(env.hover_height * 0.65, env.press_height + 0.05)
+    source_hover_xyz[2] = source_xyz[2] + 0.04  # hover 4cm above stone
     source_press_xyz = source_xyz.copy()
-    source_press_xyz[2] = max(env.press_height + 0.002, source_xyz[2] - 0.006)
+    source_press_xyz[2] = source_xyz[2]  # descend to actual stone height
 
     # Optional phase 0: move to a random detour waypoint to create longer / larger motions.
     if detour_steps > 0 and detour_radius > 0.0:
@@ -228,7 +228,7 @@ def _collect_single_episode(
             env=env,
             env_interface=env_interface,
             goal_xyz=source_press_xyz,
-            num_steps=max(5, press_steps // 2),
+            num_steps=max(20, press_steps),
             gripper=1.0,
             controller_divisor=controller_divisor,
             states=states,
