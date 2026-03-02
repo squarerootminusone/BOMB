@@ -1028,12 +1028,45 @@ class GoRobosuiteBenchmarkEnv:
             return None
         raise ValueError(f"unsupported render mode: {mode}")
 
-    def _xy_to_image_rc(self, xy: np.ndarray, height: int, width: int) -> Tuple[int, int]:
-        span_xy = self.workspace_high[:2] - self.workspace_low[:2]
-        norm_xy = (xy - self.workspace_low[:2]) / np.maximum(span_xy, 1e-6)
-        col = int(np.clip(round(norm_xy[0] * (width - 1)), 0, width - 1))
-        row = int(np.clip(round((1.0 - norm_xy[1]) * (height - 1)), 0, height - 1))
+    def _world_to_image_rc(self, xyz: np.ndarray, height: int, width: int) -> Tuple[int, int]:
+        """Project a 3D world point to image (row, col) using the MuJoCo camera.
+
+        MuJoCo camera body frame: +x right, +y up, +z backward (looks along -z).
+        CV/image convention: +x right, +y down, +z forward.
+        The axis correction diag(1, -1, -1) converts between them.
+        The rendered image is flipped via [::-1] to standard top-down convention.
+        """
+        sim = self._rs_env.sim
+        cam_name = self._rs_env.camera_names[0]
+        cam_id = sim.model.camera_name2id(cam_name)
+
+        cam_pos = sim.data.cam_xpos[cam_id]
+        cam_mat = sim.data.cam_xmat[cam_id].reshape(3, 3)
+
+        # Transform world point into MuJoCo camera frame (right, up, backward)
+        p_world = np.asarray(xyz, dtype=np.float64).ravel()[:3]
+        p_cam = cam_mat.T @ (p_world - cam_pos)
+
+        # Convert to CV convention: x_cv = x, y_cv = -y, z_cv = -z
+        # z_cv (depth) is positive for visible points
+        depth = -p_cam[2]
+        if depth < 1e-8:
+            return height // 2, width // 2
+
+        fovy = sim.model.cam_fovy[cam_id]
+        f = (0.5 * height) / np.tan(np.radians(fovy) * 0.5)
+
+        col = f * p_cam[0] / depth + width * 0.5
+        row = f * (-p_cam[1]) / depth + height * 0.5
+
+        col = int(np.clip(round(col), 0, width - 1))
+        row = int(np.clip(round(row), 0, height - 1))
         return row, col
+
+    def _xy_to_image_rc(self, xy: np.ndarray, height: int, width: int) -> Tuple[int, int]:
+        """Project a world XY point (at board height) to image coordinates."""
+        xyz = np.array([xy[0], xy[1], self.table_top_z], dtype=np.float64)
+        return self._world_to_image_rc(xyz, height, width)
 
     @staticmethod
     def _draw_disk(image: np.ndarray, row: int, col: int, radius: int, color: np.ndarray) -> None:
@@ -1050,7 +1083,7 @@ class GoRobosuiteBenchmarkEnv:
     def _overlay_debug_markers(self, image: np.ndarray) -> np.ndarray:
         rendered = image.copy()
         h, w = rendered.shape[:2]
-        target_rc = self._xy_to_image_rc(self._target_pose[:2, 3], h, w)
+        target_rc = self._world_to_image_rc(self._target_pose[:3, 3], h, w)
         self._draw_disk(
             rendered,
             row=target_rc[0],
@@ -1060,7 +1093,7 @@ class GoRobosuiteBenchmarkEnv:
         )
 
         for idx, xyz in enumerate(self._eef_trail):
-            row, col = self._xy_to_image_rc(xyz[:2], h, w)
+            row, col = self._world_to_image_rc(xyz, h, w)
             alpha = float(idx + 1) / float(max(len(self._eef_trail), 1))
             color = np.array(
                 [int(220 * alpha), int(40 + 180 * alpha), int(20 + 20 * alpha)],
@@ -1068,7 +1101,7 @@ class GoRobosuiteBenchmarkEnv:
             )
             self._draw_disk(rendered, row=row, col=col, radius=1, color=color)
 
-        eef_rc = self._xy_to_image_rc(self.get_eef_pose()[:2, 3], h, w)
+        eef_rc = self._world_to_image_rc(self.get_eef_pose()[:3, 3], h, w)
         self._draw_disk(
             rendered,
             row=eef_rc[0],
