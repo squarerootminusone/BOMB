@@ -194,13 +194,16 @@ def _collect_single_episode(
         )
 
     # Physical-pick phase (robosuite backend): approach source stone and grasp it
-    # before transfer to the board target.
+    # before transfer to the board target.  The arm starts at its home pose
+    # (z≈1.02) and must travel ~0.22 m to reach the source stone (z≈0.80),
+    # so generous step budgets are needed for the proportional controller to
+    # converge through the OSC dynamics.
     if hasattr(env, "get_source_stone_pose"):
         _drive_to_pose(
             env=env,
             env_interface=env_interface,
             goal_xyz=source_hover_xyz,
-            num_steps=max(6, approach_steps // 2),
+            num_steps=max(30, approach_steps),
             gripper=0.0,
             controller_divisor=controller_divisor,
             states=states,
@@ -214,7 +217,7 @@ def _collect_single_episode(
             env=env,
             env_interface=env_interface,
             goal_xyz=source_press_xyz,
-            num_steps=max(6, press_steps),
+            num_steps=max(15, press_steps),
             gripper=0.0,
             controller_divisor=controller_divisor,
             states=states,
@@ -228,7 +231,7 @@ def _collect_single_episode(
             env=env,
             env_interface=env_interface,
             goal_xyz=source_press_xyz,
-            num_steps=max(20, press_steps),
+            num_steps=max(25, press_steps),
             gripper=1.0,
             controller_divisor=controller_divisor,
             states=states,
@@ -242,7 +245,7 @@ def _collect_single_episode(
             env=env,
             env_interface=env_interface,
             goal_xyz=source_hover_xyz,
-            num_steps=max(6, retreat_steps),
+            num_steps=max(15, retreat_steps),
             gripper=1.0,
             controller_divisor=controller_divisor,
             states=states,
@@ -258,7 +261,7 @@ def _collect_single_episode(
         env=env,
         env_interface=env_interface,
         goal_xyz=hover_xyz,
-        num_steps=approach_steps,
+        num_steps=max(20, approach_steps),
         gripper=1.0,
         controller_divisor=controller_divisor,
         states=states,
@@ -273,7 +276,7 @@ def _collect_single_episode(
             env=env,
             env_interface=env_interface,
             goal_xyz=press_xyz,
-            num_steps=press_steps,
+            num_steps=max(15, press_steps),
             gripper=1.0,
             controller_divisor=controller_divisor,
             states=states,
@@ -282,12 +285,29 @@ def _collect_single_episode(
             actions=actions,
         )
 
-    # Phase 3: retreat to hover.
+    # Phase 3a: release — hold position while gripper opens so the stone
+    # is actually dropped before the arm retreats upward.
+    _drive_to_pose(
+        env=env,
+        env_interface=env_interface,
+        goal_xyz=press_xyz,
+        num_steps=15,
+        gripper=0.0,
+        controller_divisor=controller_divisor,
+        states=states,
+        observations=observations,
+        datagen_infos=datagen_infos,
+        actions=actions,
+        stop_on_success=False,
+        stop_on_done=True,
+    )
+
+    # Phase 3b: retreat to hover.
     _drive_to_pose(
         env=env,
         env_interface=env_interface,
         goal_xyz=hover_xyz,
-        num_steps=retreat_steps,
+        num_steps=max(15, retreat_steps),
         gripper=0.0,
         controller_divisor=controller_divisor,
         states=states,

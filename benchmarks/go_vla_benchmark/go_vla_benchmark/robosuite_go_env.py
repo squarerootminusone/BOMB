@@ -837,13 +837,13 @@ class GoRobosuiteBenchmarkEnv:
         self.seed_random_opening(options.opening_moves)
         # Settle stones after opening placement; high joint damping (0.1)
         # and contact params allow fast convergence.
-        self._settle_stones(num_steps=50)
+        self._settle_stones(num_steps=200)
         if options.target_row is not None and options.target_col is not None:
             self.set_target_intersection(row=int(options.target_row), col=int(options.target_col))
         else:
             self.set_target_from_random_legal_move()
         self._spawn_active_stone()
-        self._settle_stones(num_steps=20)
+        self._settle_stones(num_steps=100)
         self._eef_trail = [self.get_eef_pose()[:3, 3].copy()]
         return self.get_observation()
 
