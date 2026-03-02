@@ -111,7 +111,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
     ):
         self.board_size = 5
         self.table_full_size = np.array((0.9, 0.9, 0.05), dtype=np.float32)
-        self.table_friction = (1.0, 5e-3, 1e-4)
+        self.table_friction = (1.5, 0.05, 0.02)
         self.table_offset = np.array((0.0, 0.0, 0.8), dtype=np.float32)
 
         self.board_spacing = 0.045
@@ -207,29 +207,40 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         mujoco_arena.set_origin([0.0, 0.0, 0.0])
         self._add_board_visuals(mujoco_arena=mujoco_arena)
 
+        # Stone contact parameters tuned for stable resting on board:
+        # - condim=4 enables torsional friction (prevents spinning/sliding)
+        # - high sliding friction (1.5) matches real stone-on-wood
+        # - solref/solimp give stiff, near-rigid contacts
+        stone_friction = [1.5, 0.05, 0.02]
+        stone_solref = [0.002, 1.0]
+        stone_solimp = [0.998, 0.998, 0.001]
+        stone_density = 2500.0  # ~0.025kg for a 13mm radius, 6mm tall cylinder
+
         self._stone_objects = []
         for idx in range(self._white_count):
-            self._stone_objects.append(
-                CylinderObject(
-                    name=f"white_stone_{idx}",
-                    size=[self.stone_radius, self.stone_half_height],
-                    rgba=[0.96, 0.96, 0.96, 1.0],
-                    density=1000.0,
-                    friction=[1.0, 0.01, 0.001],
-                    rng=self.rng,
-                )
+            obj = CylinderObject(
+                name=f"white_stone_{idx}",
+                size=[self.stone_radius, self.stone_half_height],
+                rgba=[0.96, 0.96, 0.96, 1.0],
+                density=stone_density,
+                friction=stone_friction,
+                solref=stone_solref,
+                solimp=stone_solimp,
+                rng=self.rng,
             )
+            self._stone_objects.append(obj)
         for idx in range(self._black_count):
-            self._stone_objects.append(
-                CylinderObject(
-                    name=f"black_stone_{idx}",
-                    size=[self.stone_radius, self.stone_half_height],
-                    rgba=[0.08, 0.08, 0.08, 1.0],
-                    density=1000.0,
-                    friction=[1.0, 0.01, 0.001],
-                    rng=self.rng,
-                )
+            obj = CylinderObject(
+                name=f"black_stone_{idx}",
+                size=[self.stone_radius, self.stone_half_height],
+                rgba=[0.08, 0.08, 0.08, 1.0],
+                density=stone_density,
+                friction=stone_friction,
+                solref=stone_solref,
+                solimp=stone_solimp,
+                rng=self.rng,
             )
+            self._stone_objects.append(obj)
 
         self.model = ManipulationTask(
             mujoco_arena=mujoco_arena,
@@ -250,9 +261,10 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             ],
             dtype=np.float32,
         )
+        # Visual board surface
         table_body.append(
             new_geom(
-                name="go_board_surface",
+                name="go_board_surface_visual",
                 type="box",
                 size=[board_half, board_half, board_thickness],
                 pos=board_center_local,
@@ -260,6 +272,20 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
                 rgba=[0.74, 0.62, 0.46, 1.0],
                 contype="0",
                 conaffinity="0",
+            )
+        )
+        # Collision board surface with matching contact params for stable stone resting
+        table_body.append(
+            new_geom(
+                name="go_board_surface_collision",
+                type="box",
+                size=[board_half, board_half, board_thickness],
+                pos=board_center_local,
+                group=2,
+                rgba=[0.74, 0.62, 0.46, 0.0],  # invisible
+                friction=[1.5, 0.05, 0.02],
+                solref=[0.002, 1.0],
+                solimp=[0.998, 0.998, 0.001],
             )
         )
 
@@ -312,9 +338,62 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
 
     def _reset_internal(self):
         super()._reset_internal()
+        self._patch_physics_params()
         for stone_idx in range(len(self._stone_objects)):
             self.hide_stone(stone_idx)
         self.sim.forward()
+
+    def _patch_physics_params(self):
+        """Patch compiled MuJoCo model for stable stone-on-board contacts."""
+        model = self.sim.model
+
+        # --- Solver options ---
+        model.opt.noslip_iterations = 5
+        model.opt.noslip_tolerance = 1e-6
+
+        # --- Stone geom contact parameters ---
+        # Find all stone geom IDs and patch them directly
+        for obj in self._stone_objects:
+            body_name = obj.root_body
+            body_id = model.body_name2id(body_name)
+            # Iterate geoms belonging to this body
+            for geom_id in range(model.ngeom):
+                if model.geom_bodyid[geom_id] == body_id:
+                    model.geom_condim[geom_id] = 4  # torsional friction
+                    model.geom_friction[geom_id] = [1.5, 0.05, 0.02]
+                    model.geom_solref[geom_id] = [0.002, 1.0]
+                    model.geom_solimp[geom_id] = [0.998, 0.998, 0.001, 0.5, 2.0]
+                    model.geom_margin[geom_id] = 0.0002
+                    model.geom_gap[geom_id] = 0.0
+
+        # --- Board collision surface ---
+        try:
+            board_geom_id = model.geom_name2id("go_board_surface_collision")
+            model.geom_condim[board_geom_id] = 4
+            model.geom_friction[board_geom_id] = [1.5, 0.05, 0.02]
+            model.geom_solref[board_geom_id] = [0.002, 1.0]
+            model.geom_solimp[board_geom_id] = [0.998, 0.998, 0.001, 0.5, 2.0]
+        except Exception:
+            pass
+
+        # --- Table surface ---
+        try:
+            for name in ["table_collision", "table_visual"]:
+                gid = model.geom_name2id(name)
+                model.geom_condim[gid] = 4
+                model.geom_friction[gid] = [1.5, 0.05, 0.02]
+                model.geom_solref[gid] = [0.002, 1.0]
+                model.geom_solimp[gid] = [0.998, 0.998, 0.001, 0.5, 2.0]
+        except Exception:
+            pass
+
+        # --- Joint damping on stone free joints ---
+        # 0.1 is enough to kill drift without affecting grasping dynamics
+        for jnt_name in self._stone_joint_names:
+            jnt_id = model.joint_name2id(jnt_name)
+            dof_start = model.jnt_dofadr[jnt_id]
+            for i in range(6):
+                model.dof_damping[dof_start + i] = 0.1
 
     def _check_success(self):
         return False
@@ -573,6 +652,7 @@ class GoRobosuiteBenchmarkEnv:
 
     def _place_stone_at_intersection(self, stone_idx: int, row: int, col: int) -> None:
         xyz = self._intersection_xyz[int(row), int(col)].copy()
+        xyz[2] += 0.005  # place 5mm above target, let physics settle
         self._rs_env.set_stone_pose(stone_idx=int(stone_idx), pos=xyz)
 
     def _sync_captures(self, prev_board: np.ndarray, new_board: np.ndarray) -> None:
@@ -610,7 +690,12 @@ class GoRobosuiteBenchmarkEnv:
                 stone_idx = self._reserve_next_stone(player_id=player_id)
                 if stone_idx is None:
                     return False
-            self._place_stone_at_intersection(stone_idx=stone_idx, row=row, col=col)
+            if not use_active_white_stone:
+                # Only teleport stones that are being placed programmatically
+                # (e.g. opening moves, opponent moves). For the active stone
+                # being carried by the gripper, leave it at its current
+                # physical position so the arm can place it naturally.
+                self._place_stone_at_intersection(stone_idx=stone_idx, row=row, col=col)
             self._stone_assignments[(int(player_id), int(row), int(col))] = int(stone_idx)
             if use_active_white_stone:
                 self._active_white_stone_idx = None
@@ -650,6 +735,21 @@ class GoRobosuiteBenchmarkEnv:
         self._active_white_stone_idx = int(stone_idx)
         spawn_xyz = self._source_xyz.copy()
         self._rs_env.set_stone_pose(stone_idx=self._active_white_stone_idx, pos=spawn_xyz)
+        self._rs_env.sim.forward()
+
+    def _settle_stones(self, num_steps: int = 500) -> None:
+        """Run physics steps with zero action to let stones settle.
+
+        Uses full env.step with zero action so the arm controller holds
+        position (prevents arm from falling and shaking the table).
+        Then zeros all stone velocities to eliminate residual drift.
+        """
+        zero_action = np.zeros(self._rs_env.action_dim, dtype=np.float32)
+        for _ in range(num_steps):
+            self._rs_env.step(zero_action)
+        # Zero out all stone velocities after settling
+        for jnt_name in self._rs_env._stone_joint_names:
+            self._rs_env.sim.data.set_joint_qvel(jnt_name, np.zeros(6, dtype=np.float64))
         self._rs_env.sim.forward()
 
     def _commit_target_move_fallback(self) -> bool:
@@ -735,11 +835,15 @@ class GoRobosuiteBenchmarkEnv:
         self._success_step = None
 
         self.seed_random_opening(options.opening_moves)
+        # Settle stones after opening placement: run 500 physics steps
+        # with arm held still so stones reach stable resting positions
+        self._settle_stones(num_steps=500)
         if options.target_row is not None and options.target_col is not None:
             self.set_target_intersection(row=int(options.target_row), col=int(options.target_col))
         else:
             self.set_target_from_random_legal_move()
         self._spawn_active_stone()
+        self._settle_stones(num_steps=200)  # settle the active stone too
         self._eef_trail = [self.get_eef_pose()[:3, 3].copy()]
         return self.get_observation()
 
@@ -882,10 +986,6 @@ class GoRobosuiteBenchmarkEnv:
             ):
                 action_int = row * self.board_size + col
                 self._move_committed = self._apply_go_action(action_int=int(action_int))
-                if self._move_committed and (self._success_step is None):
-                    self._success_step = int(self._step_count)
-            elif target_press_ready:
-                self._move_committed = self._commit_target_move_fallback()
                 if self._move_committed and (self._success_step is None):
                     self._success_step = int(self._step_count)
 
