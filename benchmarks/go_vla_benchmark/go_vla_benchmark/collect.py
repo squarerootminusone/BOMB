@@ -1,11 +1,7 @@
 """Source demonstration collection for the Go benchmark."""
-
 from __future__ import annotations
-
 from typing import Any, Dict, List, Tuple
-
 import numpy as np
-
 from .common import GoResetOptions
 from .dataset_io import EpisodeRecord, write_dataset
 from .env_factory import create_benchmark_env
@@ -13,6 +9,7 @@ from .mimicgen_interface import MG_GoJacoSingleMove
 
 
 def _stack_obs(obs_seq: List[Dict[str, np.ndarray]]) -> Dict[str, np.ndarray]:
+    """Stack a list of observation dicts into a single dict of arrays."""
     keys = obs_seq[0].keys()
     return {k: np.asarray([obs[k] for obs in obs_seq]) for k in keys}
 
@@ -26,6 +23,7 @@ def _append_transition(
     datagen_infos: List[object],
     actions: List[np.ndarray],
 ) -> Tuple[bool, Dict[str, object]]:
+    """Record one env step: snapshot state/obs before stepping, then append to buffers."""
     state = env.get_state()["states"]
     obs = env.get_observation()
     datagen_info = env_interface.get_datagen_info(action=action)
@@ -54,6 +52,7 @@ def _drive_to_pose(
     stop_on_success: bool = True,
     stop_on_done: bool = True,
 ) -> bool:
+    """Drive the end-effector toward goal_xyz using proportional control for up to num_steps."""
     controller_divisor = max(float(controller_divisor), 1e-6)
     for _ in range(int(num_steps)):
         cur_xyz = env.get_eef_pose()[:3, 3]
@@ -81,6 +80,7 @@ def _compute_side_hover_xyz(
     target_xyz: np.ndarray,
     side_margin: float,
 ) -> np.ndarray:
+    """Pick the board-edge waypoint farthest from target_xyz for side-transfer arcs."""
     board_low_xy, board_high_xy = env.get_board_xy_bounds()
     board_center = env.get_board_origin_pose()[:3, 3]
     side_margin = max(0.02, float(side_margin))
@@ -126,6 +126,7 @@ def _collect_single_episode(
     side_margin: float,
     recovery_steps: int,
 ) -> Tuple[EpisodeRecord, bool]:
+    """Execute one scripted pick-and-place episode, returning the recorded trajectory."""
     initial_state = env.get_state()
 
     states: List[np.ndarray] = []
@@ -141,23 +142,19 @@ def _collect_single_episode(
     )
     hover_xyz = target_xyz.copy()
     hover_xyz[2] = max(env.hover_height * 0.7, env.press_height + 0.05)
-    side_hover_xyz = _compute_side_hover_xyz(
-        env=env,
-        target_xyz=target_xyz,
-        side_margin=side_margin,
-    )
+    if side_transfer_steps > 0:
+        side_hover_xyz = _compute_side_hover_xyz(
+            env=env,
+            target_xyz=target_xyz,
+            side_margin=side_margin,
+        )
 
     # Release height: clear the board surface (2× board_thickness) plus
-    # existing stones (2× stone_height) plus finger clearance (2× stone_height).
+    # existing stones and finger clearance (3× stone_height).
     release_z = env.table_top_z + env.board_thickness * 2 + env.stone_height * 3
 
     press_xyz = target_xyz.copy()
     press_xyz[2] = release_z
-
-    source_hover_xyz = source_xyz.copy()
-    source_hover_xyz[2] = source_xyz[2] + 0.04  # hover 4cm above stone
-    source_press_xyz = source_xyz.copy()
-    source_press_xyz[2] = source_xyz[2]  # descend to stone height
 
     # Optional phase 0: move to a random detour waypoint to create longer / larger motions.
     if detour_steps > 0 and detour_radius > 0.0:
@@ -203,6 +200,10 @@ def _collect_single_episode(
     # so generous step budgets are needed for the proportional controller to
     # converge through the OSC dynamics.
     if hasattr(env, "get_source_stone_pose"):
+        source_hover_xyz = source_xyz.copy()
+        source_hover_xyz[2] = source_xyz[2] + 0.04  # hover 4cm above stone
+        source_press_xyz = source_xyz.copy()
+        source_press_xyz[2] = source_xyz[2]  # descend to stone height
         _drive_to_pose(
             env=env,
             env_interface=env_interface,
@@ -289,7 +290,7 @@ def _collect_single_episode(
             actions=actions,
         )
 
-    # Phase 2.5: hold position until arm velocity settles.
+    # Phase 3: hold position until arm velocity settles.
     # Take a step first, *then* measure displacement so prev/cur span a real
     # simulation tick.
     settle_threshold = 1e-4  # m/step — sub-0.1mm movement per step
@@ -307,12 +308,12 @@ def _collect_single_episode(
             break
         prev_xyz = cur_xyz.copy()
 
-    # Phase 3: open gripper to release stone.
+    # Phase 4: open gripper and hold at release height so stone falls clear.
     _drive_to_pose(
         env=env,
         env_interface=env_interface,
         goal_xyz=press_xyz,
-        num_steps=20,
+        num_steps=35,
         gripper=0.0,
         controller_divisor=controller_divisor,
         states=states,
@@ -323,23 +324,7 @@ def _collect_single_episode(
         stop_on_done=False,
     )
 
-    # Phase 3.5: hold position with gripper open so stone falls clear.
-    _drive_to_pose(
-        env=env,
-        env_interface=env_interface,
-        goal_xyz=press_xyz,
-        num_steps=15,
-        gripper=0.0,
-        controller_divisor=controller_divisor,
-        states=states,
-        observations=observations,
-        datagen_infos=datagen_infos,
-        actions=actions,
-        stop_on_success=False,
-        stop_on_done=False,
-    )
-
-    # Phase 4: retreat to hover.
+    # Phase 5: retreat to hover.
     _drive_to_pose(
         env=env,
         env_interface=env_interface,
@@ -355,8 +340,8 @@ def _collect_single_episode(
         stop_on_done=True,
     )
 
-    # Optional phase 4: move to side waypoint after committing the move to
-    # produce large board-to-side displacement in recorded trajectories.
+    # Optional side transfer: move to side waypoint after committing the move
+    # to produce large board-to-side displacement in recorded trajectories.
     if side_transfer_steps > 0:
         _drive_to_pose(
             env=env,
