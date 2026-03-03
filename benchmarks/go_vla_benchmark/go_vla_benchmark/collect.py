@@ -147,9 +147,9 @@ def _collect_single_episode(
         side_margin=side_margin,
     )
 
-    # Release height: high enough that the stone can fall freely out of the
-    # open gripper (~8cm above table so fingers clear the stone diameter).
-    release_z = env.table_top_z + 0.08
+    # Release height: clear the board surface (2× board_thickness) plus
+    # existing stones (2× stone_height) plus finger clearance (2× stone_height).
+    release_z = env.table_top_z + env.board_thickness * 2 + env.stone_height * 3
 
     press_xyz = target_xyz.copy()
     press_xyz[2] = release_z
@@ -274,7 +274,7 @@ def _collect_single_episode(
         actions=actions,
     )
 
-    # Phase 2: descend to release height (8cm above table) with gripper closed.
+    # Phase 2: descend to release height with gripper closed.
     if not success:
         success = _drive_to_pose(
             env=env,
@@ -289,8 +289,25 @@ def _collect_single_episode(
             actions=actions,
         )
 
-    # Phase 3: open gripper to drop stone. At 8cm above table the stone
-    # falls freely through the open fingers onto the board.
+    # Phase 2.5: hold position until arm velocity settles.
+    # Take a step first, *then* measure displacement so prev/cur span a real
+    # simulation tick.
+    settle_threshold = 1e-4  # m/step — sub-0.1mm movement per step
+    prev_xyz = env.get_eef_pose()[:3, 3].copy()
+    for _ in range(30):  # max 30 extra steps
+        delta = press_xyz - prev_xyz
+        action_xyz = np.clip(delta / (env.action_scale * controller_divisor), -1.0, 1.0)
+        action = np.concatenate([action_xyz, np.array([1.0], dtype=np.float32)])
+        _append_transition(env=env, env_interface=env_interface, action=action,
+                           states=states, observations=observations,
+                           datagen_infos=datagen_infos, actions=actions)
+        cur_xyz = env.get_eef_pose()[:3, 3]
+        speed = float(np.linalg.norm(cur_xyz - prev_xyz))
+        if speed < settle_threshold:
+            break
+        prev_xyz = cur_xyz.copy()
+
+    # Phase 3: open gripper to release stone.
     _drive_to_pose(
         env=env,
         env_interface=env_interface,
@@ -303,7 +320,23 @@ def _collect_single_episode(
         datagen_infos=datagen_infos,
         actions=actions,
         stop_on_success=False,
-        stop_on_done=True,
+        stop_on_done=False,
+    )
+
+    # Phase 3.5: hold position with gripper open so stone falls clear.
+    _drive_to_pose(
+        env=env,
+        env_interface=env_interface,
+        goal_xyz=press_xyz,
+        num_steps=15,
+        gripper=0.0,
+        controller_divisor=controller_divisor,
+        states=states,
+        observations=observations,
+        datagen_infos=datagen_infos,
+        actions=actions,
+        stop_on_success=False,
+        stop_on_done=False,
     )
 
     # Phase 4: retreat to hover.
@@ -379,8 +412,8 @@ def collect_source_demonstrations(
     opening_moves_min: int = 0,
     opening_moves_max: int = 8,
     include_image_obs: bool = True,
-    camera_height: int = 84,
-    camera_width: int = 84,
+    camera_height: int = 256,  # must be 256 for readable preview videos
+    camera_width: int = 256,  # must be 256 for readable preview videos
     gnugo_path: str | None = None,
     action_scale: float = 0.03,
     success_hold_steps: int = 0,

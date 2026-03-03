@@ -57,8 +57,9 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="square camera size (pixels); overrides --camera-height / --camera-width",
     )
-    parser.add_argument("--camera-height", type=int, default=84)
-    parser.add_argument("--camera-width", type=int, default=84)
+    # Must be 256 for readable preview videos
+    parser.add_argument("--camera-height", type=int, default=256)
+    parser.add_argument("--camera-width", type=int, default=256)
     parser.add_argument("--gnugo-path", type=str, default=None, help="optional path to gnugo binary")
     parser.add_argument("--robot", type=str, default="Panda", help="robot name for robosuite backend")
     parser.add_argument(

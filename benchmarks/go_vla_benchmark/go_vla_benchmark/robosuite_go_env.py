@@ -384,6 +384,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         model.opt.integrator = 2  # mjtIntegrator.mjINT_IMPLICIT
 
         # --- Solver options ---
+        model.opt.solver = 2  # mjtSolver.mjSOL_NEWTON
         model.opt.noslip_iterations = 5
         model.opt.noslip_tolerance = 1e-6
 
@@ -557,6 +558,7 @@ class GoRobosuiteBenchmarkEnv:
         self._source_xyz = self._rs_env.source_stone_xyz.copy()
         self.table_top_z = float(self._rs_env.table_top_z)
         self.stone_height = float(self._rs_env.stone_height)
+        self.board_thickness = 0.0025
         self.hover_height = self.table_top_z + float(hover_height)
         self.press_height = self.table_top_z + float(press_height)
 
