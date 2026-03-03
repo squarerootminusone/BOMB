@@ -193,6 +193,13 @@ def main() -> None:
                 frames_per_demo[demo_key] = count
                 total_frames += count
 
+                # Hold last frame for 0.5s at end of each demo
+                hold_frames = max(1, int(0.5 * args.fps))
+                last_frame = frames[-1] if len(frames) > 0 else blank
+                for _ in range(hold_frames):
+                    writer.append_data(last_frame)
+                    total_frames += 1
+
                 if idx < len(demo_keys) - 1:
                     for _ in range(separator_frames):
                         writer.append_data(blank)

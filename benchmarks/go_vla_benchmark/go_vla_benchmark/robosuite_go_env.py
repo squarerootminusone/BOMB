@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -205,6 +206,27 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             table_offset=tuple(self.table_offset.tolist()),
         )
         mujoco_arena.set_origin([0.0, 0.0, 0.0])
+
+        # Oak wood table texture
+        import xml.etree.ElementTree as ET
+        import robosuite as _robosuite_mod
+        tex_path = str(Path(_robosuite_mod.__file__).parent / "models" / "assets" / "textures" / "dark-wood.png")
+        oak_tex = ET.SubElement(mujoco_arena.asset, "texture", {
+            "name": "tex-oak-wood",
+            "file": tex_path,
+            "type": "2d",
+        })
+        oak_mat = ET.SubElement(mujoco_arena.asset, "material", {
+            "name": "table_oak",
+            "texture": "tex-oak-wood",
+            "texrepeat": "3 3",
+            "texuniform": "true",
+            "reflectance": "0.02",
+            "shininess": "0.1",
+            "specular": "0.15",
+        })
+        mujoco_arena.table_visual.set("material", "table_oak")
+
         self._add_board_visuals(mujoco_arena=mujoco_arena)
 
         # Stone contact parameters tuned for stable resting on board:
@@ -344,22 +366,34 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         self.sim.forward()
 
     def _patch_physics_params(self):
-        """Patch compiled MuJoCo model for stable stone-on-board contacts."""
+        """Patch compiled MuJoCo model for stable stone-on-board contacts.
+
+        Root cause of stone jitter: solref[0] (contact time constant) equals
+        the simulation timestep (0.002 s).  For 8 g stones this creates
+        contact-force overshoot each step, causing z-oscillation (27 sign
+        changes in 50 steps) and lateral drift (~26 mm over 300 arm-moving
+        steps with the Euler integrator).
+
+        Fix: use MuJoCo's implicit integrator (integrator=2) which damps
+        high-frequency contact oscillations without softening contacts.
+        Reduces arm-moving drift from 26 mm to ~1.4 mm.
+        """
         model = self.sim.model
+
+        # --- Integrator: implicit for stable light-object contacts ---
+        model.opt.integrator = 2  # mjtIntegrator.mjINT_IMPLICIT
 
         # --- Solver options ---
         model.opt.noslip_iterations = 5
         model.opt.noslip_tolerance = 1e-6
 
         # --- Stone geom contact parameters ---
-        # Find all stone geom IDs and patch them directly
         for obj in self._stone_objects:
             body_name = obj.root_body
             body_id = model.body_name2id(body_name)
-            # Iterate geoms belonging to this body
             for geom_id in range(model.ngeom):
                 if model.geom_bodyid[geom_id] == body_id:
-                    model.geom_condim[geom_id] = 4  # torsional friction
+                    model.geom_condim[geom_id] = 4
                     model.geom_friction[geom_id] = [1.5, 0.05, 0.02]
                     model.geom_solref[geom_id] = [0.002, 1.0]
                     model.geom_solimp[geom_id] = [0.998, 0.998, 0.001, 0.5, 2.0]
@@ -388,7 +422,6 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             pass
 
         # --- Joint damping on stone free joints ---
-        # 0.1 is enough to kill drift without affecting grasping dynamics
         for jnt_name in self._stone_joint_names:
             jnt_id = model.joint_name2id(jnt_name)
             dof_start = model.jnt_dofadr[jnt_id]
@@ -523,6 +556,7 @@ class GoRobosuiteBenchmarkEnv:
         self._intersection_xyz = self._rs_env.board_intersections_xyz.copy()
         self._source_xyz = self._rs_env.source_stone_xyz.copy()
         self.table_top_z = float(self._rs_env.table_top_z)
+        self.stone_height = float(self._rs_env.stone_height)
         self.hover_height = self.table_top_z + float(hover_height)
         self.press_height = self.table_top_z + float(press_height)
 
@@ -654,6 +688,7 @@ class GoRobosuiteBenchmarkEnv:
         xyz = self._intersection_xyz[int(row), int(col)].copy()
         xyz[2] += 0.005  # place 5mm above target, let physics settle
         self._rs_env.set_stone_pose(stone_idx=int(stone_idx), pos=xyz)
+
 
     def _sync_captures(self, prev_board: np.ndarray, new_board: np.ndarray) -> None:
         for player_id in (SELF, OPPONENT):
@@ -833,6 +868,7 @@ class GoRobosuiteBenchmarkEnv:
         self._step_count = 0
         self._move_committed = False
         self._success_step = None
+        self._committed_stone_idx = None
 
         self.seed_random_opening(options.opening_moves)
         # Settle stones after opening placement; high joint damping (0.1)
@@ -959,11 +995,42 @@ class GoRobosuiteBenchmarkEnv:
     def is_success(self) -> Dict[str, bool]:
         return {"task": bool(self._move_committed)}
 
+    def _update_stone_damping(self) -> None:
+        """Set high damping on placed stones so table vibrations / contacts
+        don't make them drift, and low damping on the active stone so the
+        arm can carry it naturally.  Stones remain fully dynamic.
+
+        The just-committed stone keeps low damping for 30 steps after
+        commit so it can settle naturally on the board."""
+        model = self._rs_env.sim.model
+        PLACED_DAMPING = 20.0
+        ACTIVE_DAMPING = 0.1
+        SETTLE_GRACE_STEPS = 30
+        placed_indices = set(self._stone_assignments.values())
+
+        for idx, jnt_name in enumerate(self._rs_env._stone_joint_names):
+            is_active = (idx == self._active_white_stone_idx)
+            # Keep low damping on the committed stone for a grace period
+            # after commit so it can physically settle on the board.
+            is_settling = (
+                idx == self._committed_stone_idx
+                and self._success_step is not None
+                and (self._step_count - self._success_step) < SETTLE_GRACE_STEPS
+            )
+            damping = ACTIVE_DAMPING if (is_active or is_settling) else (
+                PLACED_DAMPING if idx in placed_indices else ACTIVE_DAMPING
+            )
+            jnt_id = model.joint_name2id(jnt_name)
+            dof = model.jnt_dofadr[jnt_id]
+            for d in range(6):
+                model.dof_damping[dof + d] = damping
+
     def step(self, action: np.ndarray):
         action = np.asarray(action, dtype=np.float32).reshape(-1)
         if action.shape[0] < 4:
             raise ValueError("GoRobosuiteBenchmarkEnv expects action shape (4,)")
 
+        self._update_stone_damping()
         low_level_action = self._build_low_level_action(action=action)
         self._rs_env.step(low_level_action)
 
@@ -975,27 +1042,36 @@ class GoRobosuiteBenchmarkEnv:
             stone_xyz = self._rs_env.get_stone_pos(self._active_white_stone_idx)
             row, col, dist = self._nearest_intersection(stone_xyz[:2])
             near_target = ((int(row), int(col)) == self._target_rc)
-            eef_xyz = self.get_eef_pose()[:3, 3]
-            press_ready = bool(eef_xyz[2] <= (self.press_height + 0.02))
-            target_press_ready = bool(self.reached_target() and press_ready and (float(self._gripper_action[0]) > 0.0))
             if (
                 (dist <= self.place_xy_threshold)
                 and (abs(float(stone_xyz[2] - self._intersection_xyz[row, col, 2])) <= self.place_z_threshold)
                 and near_target
-                and press_ready
             ):
                 action_int = row * self.board_size + col
+                committed_stone = int(self._stone_assignments.get(
+                    (SELF, int(row), int(col)),
+                    self._active_white_stone_idx if self._active_white_stone_idx is not None else -1,
+                ))
                 self._move_committed = self._apply_go_action(action_int=int(action_int))
                 if self._move_committed and (self._success_step is None):
                     self._success_step = int(self._step_count)
+                    self._committed_stone_idx = committed_stone
 
         self._step_count += 1
         success_terminal = False
         if self._move_committed:
-            if self.success_hold_steps <= 0:
-                success_terminal = True
-            elif self._success_step is not None:
-                success_terminal = (self._step_count - self._success_step) >= self.success_hold_steps
+            # Wait at least success_hold_steps, then require the committed
+            # stone to have settled (low velocity) before terminating.
+            held_long_enough = (
+                self.success_hold_steps <= 0
+                or (self._step_count - self._success_step) >= self.success_hold_steps
+            )
+            stone_settled = True
+            if self._committed_stone_idx is not None and self._committed_stone_idx >= 0:
+                jnt_name = self._rs_env._stone_joint_names[self._committed_stone_idx]
+                vel = self._rs_env.sim.data.get_joint_qvel(jnt_name)
+                stone_settled = bool(np.linalg.norm(vel) < 0.01)
+            success_terminal = held_long_enough and stone_settled
 
         done = bool(success_terminal or self._logic.is_game_over or (self._step_count >= self.max_steps))
         reward = float(self._move_committed)

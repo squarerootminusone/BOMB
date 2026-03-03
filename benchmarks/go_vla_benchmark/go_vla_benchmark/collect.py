@@ -147,13 +147,17 @@ def _collect_single_episode(
         side_margin=side_margin,
     )
 
+    # Release height: high enough that the stone can fall freely out of the
+    # open gripper (~8cm above table so fingers clear the stone diameter).
+    release_z = env.table_top_z + 0.08
+
     press_xyz = target_xyz.copy()
-    press_xyz[2] = max(0.0, env.press_height - 0.015)
+    press_xyz[2] = release_z
 
     source_hover_xyz = source_xyz.copy()
     source_hover_xyz[2] = source_xyz[2] + 0.04  # hover 4cm above stone
     source_press_xyz = source_xyz.copy()
-    source_press_xyz[2] = source_xyz[2]  # descend to actual stone height
+    source_press_xyz[2] = source_xyz[2]  # descend to stone height
 
     # Optional phase 0: move to a random detour waypoint to create longer / larger motions.
     if detour_steps > 0 and detour_radius > 0.0:
@@ -256,7 +260,7 @@ def _collect_single_episode(
             stop_on_done=True,
         )
 
-    # Phase 1: approach target intersection.
+    # Phase 1: approach target above the release height.
     success = _drive_to_pose(
         env=env,
         env_interface=env_interface,
@@ -270,7 +274,7 @@ def _collect_single_episode(
         actions=actions,
     )
 
-    # Phase 2: descend and press to commit the move.
+    # Phase 2: descend to release height (8cm above table) with gripper closed.
     if not success:
         success = _drive_to_pose(
             env=env,
@@ -285,13 +289,13 @@ def _collect_single_episode(
             actions=actions,
         )
 
-    # Phase 3a: release — hold position while gripper opens so the stone
-    # is actually dropped before the arm retreats upward.
+    # Phase 3: open gripper to drop stone. At 8cm above table the stone
+    # falls freely through the open fingers onto the board.
     _drive_to_pose(
         env=env,
         env_interface=env_interface,
         goal_xyz=press_xyz,
-        num_steps=15,
+        num_steps=20,
         gripper=0.0,
         controller_divisor=controller_divisor,
         states=states,
@@ -302,7 +306,7 @@ def _collect_single_episode(
         stop_on_done=True,
     )
 
-    # Phase 3b: retreat to hover.
+    # Phase 4: retreat to hover.
     _drive_to_pose(
         env=env,
         env_interface=env_interface,
