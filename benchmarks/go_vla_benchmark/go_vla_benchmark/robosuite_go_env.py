@@ -99,7 +99,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         render_visual_mesh: bool = True,
         render_gpu_device_id: int = -1,
         control_freq: int = 20,
-        lite_physics: bool = True,
+        lite_physics: bool = False,
         horizon: int = 400,
         ignore_done: bool = False,
         hard_reset: bool = True,
@@ -236,7 +236,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         stone_friction = [1.5, 0.05, 0.02]
         stone_solref = [0.002, 1.0]
         stone_solimp = [0.998, 0.998, 0.001]
-        stone_density = 2500.0  # ~0.025kg for a 13mm radius, 6mm tall cylinder
+        stone_density = 5000.0  # ~0.050kg for a 13mm radius, 6mm tall cylinder
 
         self._stone_objects = []
         for idx in range(self._white_count):
@@ -385,8 +385,10 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
 
         # --- Solver options ---
         model.opt.solver = 2  # mjtSolver.mjSOL_NEWTON
-        model.opt.noslip_iterations = 5
-        model.opt.noslip_tolerance = 1e-6
+        model.opt.iterations = 200
+        model.opt.tolerance = 1e-10
+        model.opt.noslip_iterations = 20
+        model.opt.noslip_tolerance = 1e-8
 
         # --- Stone geom contact parameters ---
         for obj in self._stone_objects:
