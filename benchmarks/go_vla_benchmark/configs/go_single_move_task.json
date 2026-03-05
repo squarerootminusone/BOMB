@@ -31,7 +31,7 @@
   },
   "defaults": {
     "num_demos": 200,
-    "max_attempts": 500,
+    "max_attempts": 2000,
     "select_src_per_subtask": false,
     "transform_first_robot_pose": true,
     "interpolate_from_last_target_pose": true,
