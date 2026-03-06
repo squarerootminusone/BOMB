@@ -31,6 +31,12 @@ _INSTRUCTION_TEMPLATES = [
 
 _USE_EMBED_DIM = 512
 
+# Downsample from 20 Hz to ~5 Hz (keep every 4th step)
+_SUBSAMPLE_STRIDE = 4
+
+# No-op filter: drop steps where the action norm (xyz) is below this threshold
+_NOOP_THRESHOLD = 1e-4
+
 
 def _derive_target_from_board_state(board_state: np.ndarray) -> tuple[int, int]:
     """Derive the target (row, col) from the board_state difference.
@@ -74,8 +80,11 @@ def _compute_use_embedding(text: str) -> np.ndarray:
 class Builder(tfds.core.GeneratorBasedBuilder):
     """TFDS builder for Go VLA demonstrations."""
 
-    VERSION = tfds.core.Version("1.0.0")
-    RELEASE_NOTES = {"1.0.0": "Initial release."}
+    VERSION = tfds.core.Version("1.1.0")
+    RELEASE_NOTES = {
+        "1.0.0": "Initial release.",
+        "1.1.0": "Downsample to ~5 Hz and filter no-op actions.",
+    }
 
     def _info(self) -> tfds.core.DatasetInfo:
         return self.dataset_info_from_configs(
@@ -152,10 +161,20 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                 instruction = template.format(r=row, c=col)
                 embedding = _compute_use_embedding(instruction)
 
-                num_steps = actions_7.shape[0]
+                # Downsample to ~5 Hz and filter no-op actions
+                keep = []
+                for t in range(0, actions_7.shape[0], _SUBSAMPLE_STRIDE):
+                    if np.linalg.norm(actions_7[t, :3]) >= _NOOP_THRESHOLD:
+                        keep.append(t)
+                # Always keep last step for terminal signal
+                last_t = actions_7.shape[0] - 1
+                if last_t not in keep:
+                    keep.append(last_t)
+
+                num_steps = len(keep)
                 steps = []
-                for t in range(num_steps):
-                    is_last = t == num_steps - 1
+                for i, t in enumerate(keep):
+                    is_last = i == num_steps - 1
                     steps.append(
                         {
                             "observation": {
@@ -165,7 +184,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                             "action": actions_7[t],
                             "reward": 1.0 if is_last else 0.0,
                             "discount": 1.0,
-                            "is_first": t == 0,
+                            "is_first": i == 0,
                             "is_last": is_last,
                             "is_terminal": is_last,
                             "language_instruction": instruction,
