@@ -107,6 +107,12 @@ def parse_args() -> argparse.Namespace:
         help="number of prior EEF points shown in overlay trail",
     )
     parser.add_argument("--no-image-obs", action="store_true", help="disable image observations")
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="number of parallel worker processes (0 = serial)",
+    )
     return parser.parse_args()
 
 
@@ -145,6 +151,7 @@ def main() -> None:
         eef_overlay_trail=args.eef_overlay_trail,
         robot=args.robot,
         gripper_types=args.gripper_types,
+        num_workers=args.num_workers,
     )
     print(json.dumps(stats, indent=2))
 

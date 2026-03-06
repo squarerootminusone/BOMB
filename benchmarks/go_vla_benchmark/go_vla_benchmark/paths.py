@@ -16,7 +16,10 @@ def bootstrap_pythonpath(repo_root: Path) -> None:
     candidates = [
         repo_root / "deepmind-research",
         repo_root / "mimicgen",
-        repo_root / "robosuite",
+        # NOTE: robosuite is installed as a site-package; adding the repo-level
+        # directory would shadow it with a namespace package whose __file__ is
+        # None and whose submodule layout differs from the installed version.
+        # repo_root / "robosuite",
         repo_root / "benchmarks" / "go_vla_benchmark",
     ]
     for candidate in candidates:

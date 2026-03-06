@@ -4,3 +4,9 @@
 # mimicgen
 
 robosuite-1.5.2
+
+outputs/
+LIBERO/
+.DS_Store
+__pycache__/
+*.pyc
