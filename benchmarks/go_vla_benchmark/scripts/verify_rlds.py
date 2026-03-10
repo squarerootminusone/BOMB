@@ -89,11 +89,6 @@ def main() -> None:
 
     # Sanity checks
     print()
-    rot_dims = actions[:, 3:6]
-    if np.allclose(rot_dims, 0.0):
-        print("  [OK] Rotation dims 3-5 are all zeros (padded).")
-    else:
-        print("  [WARN] Rotation dims 3-5 are NOT all zeros!")
 
     xyz = actions[:, :3]
     if xyz.min() >= -1.0 and xyz.max() <= 1.0:
@@ -103,13 +98,22 @@ def main() -> None:
             f"  [INFO] XYZ action dims 0-2 range: [{xyz.min():.4f}, {xyz.max():.4f}]"
         )
 
-    gripper = actions[:, 6]
+    gripper = actions[:, 3]
     if gripper.min() >= 0.0 and gripper.max() <= 1.0:
-        print("  [OK] Gripper dim 6 is within [0, 1].")
+        print("  [OK] Gripper dim 3 is within [0, 1].")
     else:
         print(
-            f"  [INFO] Gripper dim 6 range: [{gripper.min():.4f}, {gripper.max():.4f}]"
+            f"  [INFO] Gripper dim 3 range: [{gripper.min():.4f}, {gripper.max():.4f}]"
         )
+
+    unique_gripper = np.unique(gripper)
+    gripper_var = gripper.var()
+    print(f"  Gripper unique values: {unique_gripper}")
+    print(f"  Gripper variance: {gripper_var:.6f}")
+    if gripper_var > 0:
+        print("  [OK] Gripper has non-zero variance (not stuck).")
+    else:
+        print("  [WARN] Gripper variance is zero — model may learn constant gripper!")
 
     if args.save_frame and first_frame is not None:
         from PIL import Image
