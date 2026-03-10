@@ -1,4 +1,6 @@
 absl-py
+apache-beam
+mlcroissant
 h5py
 imageio
 imageio-ffmpeg
@@ -7,4 +9,7 @@ dm-control
 dm-env
 numpy
 open_spiel
+tensorflow==2.15.0
+tensorflow-datasets==4.9.3
+tensorflow-hub
 tqdm
