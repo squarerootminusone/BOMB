@@ -13,7 +13,7 @@ import tensorflow_datasets as tfds
 _DESCRIPTION = """\
 Go VLA benchmark demonstrations for fine-tuning vision-language-action models.
 Each episode is a single stone placement on a 5x5 Go board using a robot arm
-with OSC position control (4-DoF actions padded to 7-DoF).
+with 4-DoF actions (3 position + 1 gripper).
 """
 
 _CITATION = ""
@@ -46,14 +46,19 @@ def _derive_target_from_board_state(board_state: np.ndarray) -> tuple[int, int]:
     return row, col
 
 
-def _pad_action_4to7(actions: np.ndarray) -> np.ndarray:
-    """Pad (T, 4) actions to (T, 7): [dx,dy,dz, 0,0,0, gripper]."""
-    t = actions.shape[0]
-    padded = np.zeros((t, 7), dtype=np.float32)
-    padded[:, :3] = actions[:, :3]      # xyz deltas
-    # dims 3-5 stay zero (rotation deltas)
-    padded[:, 6] = actions[:, 3]        # gripper
-    return padded
+def _extract_action_4d(actions: np.ndarray) -> np.ndarray:
+    """Extract 4D actions [dx, dy, dz, gripper] from any source format.
+
+    Handles both legacy 4D (T, 4) and 7D (T, 7) HDF5 formats.
+    """
+    if actions.shape[1] >= 7:
+        # 7D format: [dx,dy,dz, dax,day,daz, gripper] -> [dx,dy,dz, gripper]
+        out = np.zeros((actions.shape[0], 4), dtype=np.float32)
+        out[:, :3] = actions[:, :3]
+        out[:, 3] = actions[:, 6]
+        return out
+    # Already 4D: [dx, dy, dz, gripper]
+    return actions[:, :4].astype(np.float32)
 
 
 def _compute_use_embedding(text: str) -> np.ndarray:
@@ -74,8 +79,11 @@ def _compute_use_embedding(text: str) -> np.ndarray:
 class Builder(tfds.core.GeneratorBasedBuilder):
     """TFDS builder for Go VLA demonstrations."""
 
-    VERSION = tfds.core.Version("1.0.0")
-    RELEASE_NOTES = {"1.0.0": "Initial release."}
+    VERSION = tfds.core.Version("2.0.0")
+    RELEASE_NOTES = {
+        "1.0.0": "Initial release.",
+        "2.0.0": "4-DOF actions [dx,dy,dz,gripper] instead of zero-padded 7-DOF.",
+    }
 
     def _info(self) -> tfds.core.DatasetInfo:
         return self.dataset_info_from_configs(
@@ -96,7 +104,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                                 }
                             ),
                             "action": tfds.features.Tensor(
-                                shape=(7,), dtype=np.float32
+                                shape=(4,), dtype=np.float32
                             ),
                             "reward": np.float32,
                             "discount": np.float32,
@@ -142,7 +150,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                     ep["obs/board_state"], dtype=np.float32
                 )
 
-                actions_7 = _pad_action_4to7(actions_4)
+                actions_4d = _extract_action_4d(actions_4)
                 row, col = _derive_target_from_board_state(board_state)
 
                 rng = np.random.RandomState(seed=demo_idx)
@@ -152,7 +160,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                 instruction = template.format(r=row, c=col)
                 embedding = _compute_use_embedding(instruction)
 
-                num_steps = actions_7.shape[0]
+                num_steps = actions_4d.shape[0]
                 steps = []
                 for t in range(num_steps):
                     is_last = t == num_steps - 1
@@ -162,7 +170,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                                 "image": images[t],
                                 "state": eef_pos[t],
                             },
-                            "action": actions_7[t],
+                            "action": actions_4d[t],
                             "reward": 1.0 if is_last else 0.0,
                             "discount": 1.0,
                             "is_first": t == 0,
