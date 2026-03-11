@@ -166,7 +166,7 @@ def _collect_single_episode(
             env_interface=env_interface,
             goal_xyz=detour_xyz,
             num_steps=detour_steps,
-            gripper=0.0,
+            gripper=-1.0,
             controller_divisor=controller_divisor,
             states=states,
             observations=observations,
@@ -184,7 +184,7 @@ def _collect_single_episode(
             env_interface=env_interface,
             goal_xyz=side_hover_xyz,
             num_steps=side_transfer_steps,
-            gripper=0.0,
+            gripper=-1.0,
             controller_divisor=controller_divisor,
             states=states,
             observations=observations,
@@ -208,8 +208,8 @@ def _collect_single_episode(
             env=env,
             env_interface=env_interface,
             goal_xyz=source_hover_xyz,
-            num_steps=max(30, approach_steps),
-            gripper=0.0,
+            num_steps=max(12, approach_steps),
+            gripper=-1.0,
             controller_divisor=controller_divisor,
             states=states,
             observations=observations,
@@ -222,8 +222,8 @@ def _collect_single_episode(
             env=env,
             env_interface=env_interface,
             goal_xyz=source_press_xyz,
-            num_steps=max(15, press_steps),
-            gripper=0.0,
+            num_steps=max(6, press_steps),
+            gripper=-1.0,
             controller_divisor=controller_divisor,
             states=states,
             observations=observations,
@@ -236,7 +236,7 @@ def _collect_single_episode(
             env=env,
             env_interface=env_interface,
             goal_xyz=source_press_xyz,
-            num_steps=max(25, press_steps),
+            num_steps=max(10, press_steps),
             gripper=1.0,
             controller_divisor=controller_divisor,
             states=states,
@@ -250,7 +250,7 @@ def _collect_single_episode(
             env=env,
             env_interface=env_interface,
             goal_xyz=source_hover_xyz,
-            num_steps=max(15, retreat_steps),
+            num_steps=max(6, retreat_steps),
             gripper=1.0,
             controller_divisor=controller_divisor,
             states=states,
@@ -266,7 +266,7 @@ def _collect_single_episode(
         env=env,
         env_interface=env_interface,
         goal_xyz=hover_xyz,
-        num_steps=max(20, approach_steps),
+        num_steps=max(8, approach_steps),
         gripper=1.0,
         controller_divisor=controller_divisor,
         states=states,
@@ -281,7 +281,7 @@ def _collect_single_episode(
             env=env,
             env_interface=env_interface,
             goal_xyz=press_xyz,
-            num_steps=max(15, press_steps),
+            num_steps=max(6, press_steps),
             gripper=1.0,
             controller_divisor=controller_divisor,
             states=states,
@@ -293,12 +293,12 @@ def _collect_single_episode(
     # Phase 3: hold position until arm velocity settles.
     # Take a step first, *then* measure displacement so prev/cur span a real
     # simulation tick.
-    settle_threshold = 1e-4  # m/step — sub-0.1mm movement per step
+    settle_threshold = 5e-4  # m/step — at 8 Hz, 5 steps = 0.625s settle
     prev_xyz = env.get_eef_pose()[:3, 3].copy()
-    for _ in range(30):  # max 30 extra steps
+    for _ in range(5):  # max 5 extra steps (sufficient at 8 Hz)
         delta = press_xyz - prev_xyz
         action_xyz = np.clip(delta / (env.action_scale * controller_divisor), -1.0, 1.0)
-        action = np.concatenate([action_xyz, np.array([1.0], dtype=np.float32)])
+        action = np.concatenate([action_xyz, np.array([1.0], dtype=np.float32)])  # gripper closed
         _append_transition(env=env, env_interface=env_interface, action=action,
                            states=states, observations=observations,
                            datagen_infos=datagen_infos, actions=actions)
@@ -313,7 +313,7 @@ def _collect_single_episode(
         env=env,
         env_interface=env_interface,
         goal_xyz=press_xyz,
-        num_steps=35,
+        num_steps=8,
         gripper=0.0,
         controller_divisor=controller_divisor,
         states=states,
@@ -329,7 +329,7 @@ def _collect_single_episode(
         env=env,
         env_interface=env_interface,
         goal_xyz=hover_xyz,
-        num_steps=max(15, retreat_steps),
+        num_steps=max(6, retreat_steps),
         gripper=0.0,
         controller_divisor=controller_divisor,
         states=states,
@@ -348,7 +348,7 @@ def _collect_single_episode(
             env_interface=env_interface,
             goal_xyz=side_hover_xyz,
             num_steps=side_transfer_steps,
-            gripper=0.0,
+            gripper=-1.0,
             controller_divisor=controller_divisor,
             states=states,
             observations=observations,

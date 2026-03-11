@@ -76,13 +76,40 @@ def _compute_use_embedding(text: str) -> np.ndarray:
         return np.zeros(_USE_EMBED_DIM, dtype=np.float32)
 
 
+def _deduplicate_indices(
+    actions_4d: np.ndarray,
+    eef_pos: np.ndarray,
+    action_norm_thresh: float = 0.02,
+    eef_disp_thresh: float = 0.001,
+) -> np.ndarray:
+    """Return a boolean mask selecting non-redundant frames.
+
+    Always keeps the first and last frame.  A frame is kept if either:
+    - Its action XYZ L2 norm exceeds *action_norm_thresh*, OR
+    - The EEF displacement from the last kept frame exceeds *eef_disp_thresh* (1 mm).
+    """
+    n = actions_4d.shape[0]
+    keep = np.zeros(n, dtype=bool)
+    keep[0] = True
+    keep[-1] = True
+    last_kept_pos = eef_pos[0].copy()
+    for t in range(1, n - 1):
+        action_norm = float(np.linalg.norm(actions_4d[t, :3]))
+        eef_disp = float(np.linalg.norm(eef_pos[t] - last_kept_pos))
+        if action_norm > action_norm_thresh or eef_disp > eef_disp_thresh:
+            keep[t] = True
+            last_kept_pos = eef_pos[t].copy()
+    return keep
+
+
 class Builder(tfds.core.GeneratorBasedBuilder):
     """TFDS builder for Go VLA demonstrations."""
 
-    VERSION = tfds.core.Version("2.0.0")
+    VERSION = tfds.core.Version("3.0.0")
     RELEASE_NOTES = {
         "1.0.0": "Initial release.",
         "2.0.0": "4-DOF actions [dx,dy,dz,gripper] instead of zero-padded 7-DOF.",
+        "3.0.0": "8 Hz control, board/lighting randomization, near-duplicate frame removal.",
     }
 
     def _info(self) -> tfds.core.DatasetInfo:
@@ -151,7 +178,15 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                 )
 
                 actions_4d = _extract_action_4d(actions_4)
+                # Remap gripper from {0, 1} to {-1, +1} to match LIBERO/OpenVLA convention
+                actions_4d[:, 3] = 2.0 * actions_4d[:, 3] - 1.0
                 row, col = _derive_target_from_board_state(board_state)
+
+                # Deduplicate near-identical frames (idle/settling segments)
+                keep_mask = _deduplicate_indices(actions_4d, eef_pos)
+                actions_4d = actions_4d[keep_mask]
+                images = images[keep_mask]
+                eef_pos = eef_pos[keep_mask]
 
                 rng = np.random.RandomState(seed=demo_idx)
                 template = _INSTRUCTION_TEMPLATES[

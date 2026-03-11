@@ -98,7 +98,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         render_collision_mesh: bool = False,
         render_visual_mesh: bool = True,
         render_gpu_device_id: int = -1,
-        control_freq: int = 20,
+        control_freq: int = 8,
         lite_physics: bool = True,
         horizon: int = 400,
         ignore_done: bool = False,
@@ -117,6 +117,8 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
 
         self.board_spacing = 0.045
         self.board_center_xy = np.array((0.02, 0.0), dtype=np.float32)
+        self._board_center_xy_default = self.board_center_xy.copy()
+        self._board_shift_range = 0.015  # ±1.5cm XY randomization
         self.stone_radius = 0.013
         self.stone_height = 0.006
         self.stone_half_height = self.stone_height * 0.5
@@ -361,6 +363,8 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
     def _reset_internal(self):
         super()._reset_internal()
         self._patch_physics_params()
+        self._randomize_board_position(rng=self.rng)
+        self._randomize_lighting(rng=self.rng)
         for stone_idx in range(len(self._stone_objects)):
             self.hide_stone(stone_idx)
         self.sim.forward()
@@ -385,9 +389,9 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
 
         # --- Solver options ---
         model.opt.solver = 2  # mjtSolver.mjSOL_NEWTON
-        model.opt.iterations = 200
+        model.opt.iterations = 300
         model.opt.tolerance = 1e-10
-        model.opt.noslip_iterations = 12
+        model.opt.noslip_iterations = 20
         model.opt.noslip_tolerance = 1e-8
 
         # --- Stone geom contact parameters ---
@@ -430,6 +434,67 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             dof_start = model.jnt_dofadr[jnt_id]
             for i in range(6):
                 model.dof_damping[dof_start + i] = 0.1
+
+    def _randomize_board_position(self, rng: np.random.RandomState) -> None:
+        """Shift the board ±1.5cm XY and optionally perturb surface color."""
+        shift_xy = rng.uniform(-self._board_shift_range, self._board_shift_range, size=(2,)).astype(np.float32)
+        self.board_center_xy = self._board_center_xy_default + shift_xy
+
+        model = self.sim.model
+        # Shift all board geoms (surface + grid lines) by the XY offset
+        board_geom_names = ["go_board_surface_visual", "go_board_surface_collision"]
+        for i in range(self.board_size):
+            board_geom_names.append(f"go_line_col_{i}")
+            board_geom_names.append(f"go_line_row_{i}")
+
+        for name in board_geom_names:
+            try:
+                gid = model.geom_name2id(name)
+                model.geom_pos[gid, 0] += float(shift_xy[0])
+                model.geom_pos[gid, 1] += float(shift_xy[1])
+            except Exception:
+                pass
+
+        # Optionally perturb board surface color ±0.06 RGB
+        try:
+            vis_id = model.geom_name2id("go_board_surface_visual")
+            color_perturb = rng.uniform(-0.06, 0.06, size=(3,))
+            model.geom_rgba[vis_id, :3] = np.clip(
+                model.geom_rgba[vis_id, :3] + color_perturb, 0.0, 1.0
+            )
+        except Exception:
+            pass
+
+    def _randomize_lighting(self, rng: np.random.RandomState) -> None:
+        """Perturb light positions, directions, and intensities for visual diversity."""
+        model = self.sim.model
+        for light_id in range(model.nlight):
+            model.light_pos[light_id] += rng.uniform(-0.3, 0.3, size=(3,))
+            model.light_dir[light_id] += rng.uniform(-0.15, 0.15, size=(3,))
+            model.light_diffuse[light_id] = np.clip(
+                model.light_diffuse[light_id] + rng.uniform(-0.15, 0.15, size=(3,)),
+                0.1, 1.0,
+            )
+            model.light_ambient[light_id] = np.clip(
+                model.light_ambient[light_id] + rng.uniform(-0.08, 0.08, size=(3,)),
+                0.0, 0.5,
+            )
+            model.light_specular[light_id] = np.clip(
+                model.light_specular[light_id] + rng.uniform(-0.1, 0.1, size=(3,)),
+                0.0, 1.0,
+            )
+        # Perturb headlight
+        try:
+            model.vis.headlight.diffuse[:] = np.clip(
+                model.vis.headlight.diffuse + rng.uniform(-0.1, 0.1, size=(3,)),
+                0.0, 1.0,
+            )
+            model.vis.headlight.ambient[:] = np.clip(
+                model.vis.headlight.ambient + rng.uniform(-0.05, 0.05, size=(3,)),
+                0.0, 0.5,
+            )
+        except Exception:
+            pass
 
     def _check_success(self):
         return False
@@ -861,6 +926,7 @@ class GoRobosuiteBenchmarkEnv:
         self._logic.reset()
         self._intersection_xyz = self._rs_env.board_intersections_xyz.copy()
         self._source_xyz = self._rs_env.source_stone_xyz.copy()
+        self.workspace_low, self.workspace_high = self._compute_workspace_bounds()
         self._available_stones = {
             SELF: self._rs_env.white_stone_indices,
             OPPONENT: self._rs_env.black_stone_indices,

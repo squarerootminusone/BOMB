@@ -99,8 +99,8 @@ def main() -> None:
         )
 
     gripper = actions[:, 3]
-    if gripper.min() >= 0.0 and gripper.max() <= 1.0:
-        print("  [OK] Gripper dim 3 is within [0, 1].")
+    if gripper.min() >= -1.0 and gripper.max() <= 1.0:
+        print("  [OK] Gripper dim 3 is within [-1, 1].")
     else:
         print(
             f"  [INFO] Gripper dim 3 range: [{gripper.min():.4f}, {gripper.max():.4f}]"
