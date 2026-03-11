@@ -23,10 +23,10 @@ _DEFAULT_HDF5_PATH = str(
 )
 
 _INSTRUCTION_TEMPLATES = [
-    "Place a black stone on the Go board at row {r}, column {c}.",
-    "Put a black stone at position ({r}, {c}) on the Go board.",
-    "Move the black stone to row {r}, column {c} on the board.",
-    "Set a black stone at ({r}, {c}).",
+    "Place a {color} stone on the Go board at row {r}, column {c}.",
+    "Put a {color} stone at position ({r}, {c}) on the Go board.",
+    "Move the {color} stone to row {r}, column {c} on the board.",
+    "Set a {color} stone at ({r}, {c}).",
 ]
 
 _USE_EMBED_DIM = 512
@@ -35,12 +35,18 @@ _USE_EMBED_DIM = 512
 def _derive_target_from_board_state(board_state: np.ndarray) -> tuple[int, int]:
     """Derive the target (row, col) from the board_state difference.
 
-    board_state has shape (T, 5, 5, 4). Channel 1 encodes black stones.
-    We compare the first and last timestep to find the newly placed stone.
+    board_state has shape (T, 5, 5, 4). Channel 1 encodes black stones,
+    channel 2 encodes white stones. We check both to find the newly placed stone.
     """
-    ch = 1  # black stone channel
+    for ch in [1, 2]:
+        diff = board_state[-1, :, :, ch] - board_state[0, :, :, ch]
+        if diff.max() > 0.5:
+            idx = np.argmax(diff)
+            row, col = divmod(int(idx), board_state.shape[2])
+            return row, col
+    # Fallback: channel 1
+    ch = 1
     diff = board_state[-1, :, :, ch] - board_state[0, :, :, ch]
-    # Find the cell with the largest positive change
     idx = np.argmax(diff)
     row, col = divmod(int(idx), board_state.shape[2])
     return row, col
@@ -113,6 +119,15 @@ class Builder(tfds.core.GeneratorBasedBuilder):
     }
 
     def _info(self) -> tfds.core.DatasetInfo:
+        # Read image resolution from the HDF5 to avoid hardcoding.
+        hdf5_path = os.environ.get("GO_VLA_HDF5_PATH", _DEFAULT_HDF5_PATH)
+        try:
+            with h5py.File(hdf5_path, "r") as f:
+                first_key = sorted(f["data"].keys(), key=lambda k: int(k.split("_")[1]))[0]
+                img_shape = tuple(f[f"data/{first_key}/obs/agentview_image"].shape[1:])
+        except Exception:
+            img_shape = (256, 256, 3)
+
         return self.dataset_info_from_configs(
             features=tfds.features.FeaturesDict(
                 {
@@ -121,7 +136,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                             "observation": tfds.features.FeaturesDict(
                                 {
                                     "image": tfds.features.Image(
-                                        shape=(256, 256, 3),
+                                        shape=img_shape,
                                         dtype=np.uint8,
                                         encoding_format="png",
                                     ),
@@ -188,11 +203,13 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                 images = images[keep_mask]
                 eef_pos = eef_pos[keep_mask]
 
+                stone_color = ep["stone_color"][()].decode() if "stone_color" in ep else "black"
+
                 rng = np.random.RandomState(seed=demo_idx)
                 template = _INSTRUCTION_TEMPLATES[
                     rng.randint(len(_INSTRUCTION_TEMPLATES))
                 ]
-                instruction = template.format(r=row, c=col)
+                instruction = template.format(color=stone_color, r=row, c=col)
                 embedding = _compute_use_embedding(instruction)
 
                 num_steps = actions_4d.shape[0]

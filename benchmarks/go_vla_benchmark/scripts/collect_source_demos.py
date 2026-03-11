@@ -100,6 +100,7 @@ def parse_args() -> argparse.Namespace:
         help="meters outside board bounds for side waypoint placement",
     )
     parser.add_argument("--recovery-steps", type=int, default=3)
+    parser.add_argument("--num-workers", type=int, default=1, help="parallel worker processes")
     parser.add_argument(
         "--no-physical-arm",
         action="store_true",
@@ -177,6 +178,7 @@ def main() -> None:
         eef_overlay_trail=args.eef_overlay_trail,
         robot=args.robot,
         gripper_types=args.gripper_types,
+        num_workers=args.num_workers,
     )
     print(json.dumps(stats, indent=2))
 

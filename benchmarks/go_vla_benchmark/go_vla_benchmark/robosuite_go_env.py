@@ -164,6 +164,13 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         return float(self.table_offset[2])
 
     @property
+    def board_surface_z(self) -> float:
+        """World z of the board collision surface top (where stones rest)."""
+        table_half_h = 0.5 * float(self.table_full_size[2])
+        board_thickness = 0.0025
+        return float(self.table_offset[2]) + table_half_h + 2 * board_thickness
+
+    @property
     def board_intersections_xyz(self) -> np.ndarray:
         grid = np.zeros((self.board_size, self.board_size, 3), dtype=np.float32)
         half = 0.5 * float(self.board_size - 1)
@@ -357,6 +364,33 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         self._stone_joint_names = [obj.joints[0] for obj in self._stone_objects]
         self._stone_body_ids = [self.sim.model.body_name2id(obj.root_body) for obj in self._stone_objects]
 
+        # Cache default geom positions, RGBA, and lighting for absolute randomization
+        model = self.sim.model
+        board_geom_names = ["go_board_surface_visual", "go_board_surface_collision"]
+        for i in range(self.board_size):
+            board_geom_names.append(f"go_line_col_{i}")
+            board_geom_names.append(f"go_line_row_{i}")
+        self._default_geom_pos = {}
+        self._default_geom_rgba = {}
+        for name in board_geom_names:
+            try:
+                gid = model.geom_name2id(name)
+                self._default_geom_pos[name] = model.geom_pos[gid].copy()
+                self._default_geom_rgba[name] = model.geom_rgba[gid].copy()
+            except Exception:
+                pass
+        self._default_light_pos = model.light_pos.copy()
+        self._default_light_dir = model.light_dir.copy()
+        self._default_light_diffuse = model.light_diffuse.copy()
+        self._default_light_ambient = model.light_ambient.copy()
+        self._default_light_specular = model.light_specular.copy()
+        try:
+            self._default_headlight_diffuse = model.vis.headlight.diffuse.copy()
+            self._default_headlight_ambient = model.vis.headlight.ambient.copy()
+        except Exception:
+            self._default_headlight_diffuse = None
+            self._default_headlight_ambient = None
+
     def _setup_observables(self):
         return super()._setup_observables()
 
@@ -436,63 +470,61 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
                 model.dof_damping[dof_start + i] = 0.1
 
     def _randomize_board_position(self, rng: np.random.RandomState) -> None:
-        """Shift the board ±1.5cm XY and optionally perturb surface color."""
+        """Shift the board ±1.5cm XY and optionally perturb surface color (absolute, not incremental)."""
         shift_xy = rng.uniform(-self._board_shift_range, self._board_shift_range, size=(2,)).astype(np.float32)
         self.board_center_xy = self._board_center_xy_default + shift_xy
 
         model = self.sim.model
-        # Shift all board geoms (surface + grid lines) by the XY offset
-        board_geom_names = ["go_board_surface_visual", "go_board_surface_collision"]
-        for i in range(self.board_size):
-            board_geom_names.append(f"go_line_col_{i}")
-            board_geom_names.append(f"go_line_row_{i}")
-
-        for name in board_geom_names:
+        for name, default_pos in self._default_geom_pos.items():
             try:
                 gid = model.geom_name2id(name)
-                model.geom_pos[gid, 0] += float(shift_xy[0])
-                model.geom_pos[gid, 1] += float(shift_xy[1])
+                model.geom_pos[gid, 0] = default_pos[0] + float(shift_xy[0])
+                model.geom_pos[gid, 1] = default_pos[1] + float(shift_xy[1])
             except Exception:
                 pass
 
-        # Optionally perturb board surface color ±0.06 RGB
+        # Perturb board surface color from default ±0.06 RGB
         try:
             vis_id = model.geom_name2id("go_board_surface_visual")
-            color_perturb = rng.uniform(-0.06, 0.06, size=(3,))
-            model.geom_rgba[vis_id, :3] = np.clip(
-                model.geom_rgba[vis_id, :3] + color_perturb, 0.0, 1.0
-            )
+            default_rgba = self._default_geom_rgba.get("go_board_surface_visual")
+            if default_rgba is not None:
+                color_perturb = rng.uniform(-0.06, 0.06, size=(3,))
+                model.geom_rgba[vis_id, :3] = np.clip(
+                    default_rgba[:3] + color_perturb, 0.0, 1.0
+                )
         except Exception:
             pass
 
     def _randomize_lighting(self, rng: np.random.RandomState) -> None:
-        """Perturb light positions, directions, and intensities for visual diversity."""
+        """Perturb light positions, directions, and intensities from defaults (absolute)."""
         model = self.sim.model
         for light_id in range(model.nlight):
-            model.light_pos[light_id] += rng.uniform(-0.3, 0.3, size=(3,))
-            model.light_dir[light_id] += rng.uniform(-0.15, 0.15, size=(3,))
+            model.light_pos[light_id] = self._default_light_pos[light_id] + rng.uniform(-0.3, 0.3, size=(3,))
+            model.light_dir[light_id] = self._default_light_dir[light_id] + rng.uniform(-0.15, 0.15, size=(3,))
             model.light_diffuse[light_id] = np.clip(
-                model.light_diffuse[light_id] + rng.uniform(-0.15, 0.15, size=(3,)),
+                self._default_light_diffuse[light_id] + rng.uniform(-0.15, 0.15, size=(3,)),
                 0.1, 1.0,
             )
             model.light_ambient[light_id] = np.clip(
-                model.light_ambient[light_id] + rng.uniform(-0.08, 0.08, size=(3,)),
+                self._default_light_ambient[light_id] + rng.uniform(-0.08, 0.08, size=(3,)),
                 0.0, 0.5,
             )
             model.light_specular[light_id] = np.clip(
-                model.light_specular[light_id] + rng.uniform(-0.1, 0.1, size=(3,)),
+                self._default_light_specular[light_id] + rng.uniform(-0.1, 0.1, size=(3,)),
                 0.0, 1.0,
             )
-        # Perturb headlight
+        # Perturb headlight from defaults
         try:
-            model.vis.headlight.diffuse[:] = np.clip(
-                model.vis.headlight.diffuse + rng.uniform(-0.1, 0.1, size=(3,)),
-                0.0, 1.0,
-            )
-            model.vis.headlight.ambient[:] = np.clip(
-                model.vis.headlight.ambient + rng.uniform(-0.05, 0.05, size=(3,)),
-                0.0, 0.5,
-            )
+            if self._default_headlight_diffuse is not None:
+                model.vis.headlight.diffuse[:] = np.clip(
+                    self._default_headlight_diffuse + rng.uniform(-0.1, 0.1, size=(3,)),
+                    0.0, 1.0,
+                )
+            if self._default_headlight_ambient is not None:
+                model.vis.headlight.ambient[:] = np.clip(
+                    self._default_headlight_ambient + rng.uniform(-0.05, 0.05, size=(3,)),
+                    0.0, 0.5,
+                )
         except Exception:
             pass
 
@@ -593,6 +625,7 @@ class GoRobosuiteBenchmarkEnv:
             robots=robot,
             controller_configs=controller_config,
             gripper_types=gripper_types,
+            initialization_noise={"magnitude": 0.08, "type": "uniform"},
             has_renderer=False,
             has_offscreen_renderer=True,
             render_camera="agentview",
@@ -648,6 +681,7 @@ class GoRobosuiteBenchmarkEnv:
         }
         self._stone_assignments: Dict[Tuple[int, int, int], int] = {}
         self._active_white_stone_idx: Optional[int] = None
+        self._stone_color: str = "white"
 
         self._step_count = 0
         self._move_committed = False
@@ -832,10 +866,18 @@ class GoRobosuiteBenchmarkEnv:
     def _spawn_active_stone(self) -> None:
         if self._active_white_stone_idx is not None:
             return
-        stone_idx = self._reserve_next_stone(player_id=SELF)
-        if stone_idx is None:
-            self._active_white_stone_idx = None
-            return
+        # Pick from the correct color pool
+        if self._stone_color == "black":
+            pool = self._available_stones[OPPONENT]
+            if not pool:
+                self._active_white_stone_idx = None
+                return
+            stone_idx = int(pool.pop(0))
+        else:
+            stone_idx = self._reserve_next_stone(player_id=SELF)
+            if stone_idx is None:
+                self._active_white_stone_idx = None
+                return
         self._active_white_stone_idx = int(stone_idx)
         spawn_xyz = self._source_xyz.copy()
         self._rs_env.set_stone_pose(stone_idx=self._active_white_stone_idx, pos=spawn_xyz)
@@ -940,6 +982,12 @@ class GoRobosuiteBenchmarkEnv:
         self._success_step = None
         self._committed_stone_idx = None
 
+        # Choose stone color
+        if options.stone_color is not None:
+            self._stone_color = options.stone_color
+        else:
+            self._stone_color = self._rng.choice(["black", "white"])
+
         self.seed_random_opening(options.opening_moves)
         # Settle stones after opening placement; high joint damping (0.1)
         # and contact params allow fast convergence.
@@ -948,6 +996,18 @@ class GoRobosuiteBenchmarkEnv:
             self.set_target_intersection(row=int(options.target_row), col=int(options.target_col))
         else:
             self.set_target_from_random_legal_move()
+
+        # Randomize source stone position near EEF
+        eef_xyz = self.get_eef_pose()[:3, 3]
+        stone_offset = self._rng.uniform(-0.015, 0.015, size=(2,))
+        source_xy = eef_xyz[:2] + stone_offset
+        source_xy = np.clip(source_xy, self.workspace_low[:2], self.workspace_high[:2])
+        self._source_xyz = np.array(
+            [source_xy[0], source_xy[1],
+             self._rs_env.table_top_z + self._rs_env.stone_half_height + 0.0005],
+            dtype=np.float32,
+        )
+
         self._spawn_active_stone()
         self._settle_stones(num_steps=100)
         self._eef_trail = [self.get_eef_pose()[:3, 3].copy()]
@@ -958,6 +1018,7 @@ class GoRobosuiteBenchmarkEnv:
             opening_moves=int(options.opening_moves),
             target_row=options.target_row,
             target_col=options.target_col,
+            stone_color=options.stone_color,
         )
 
     def _nearest_intersection(self, xy: np.ndarray) -> Tuple[int, int, float]:
@@ -1229,7 +1290,15 @@ class GoRobosuiteBenchmarkEnv:
     def _overlay_debug_markers(self, image: np.ndarray) -> np.ndarray:
         rendered = image.copy()
         h, w = rendered.shape[:2]
-        target_rc = self._world_to_image_rc(self._target_pose[:3, 3], h, w)
+        # Use the actual board surface geom world position from MuJoCo
+        # so the overlay dot lands exactly on the visible grid intersection.
+        target_vis_xyz = self._target_pose[:3, 3].copy()
+        try:
+            board_gid = self._rs_env.sim.model.geom_name2id("go_board_surface_visual")
+            target_vis_xyz[2] = float(self._rs_env.sim.data.geom_xpos[board_gid, 2])
+        except Exception:
+            pass
+        target_rc = self._world_to_image_rc(target_vis_xyz, h, w)
         self._draw_disk(
             rendered,
             row=target_rc[0],

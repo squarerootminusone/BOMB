@@ -1,5 +1,7 @@
 """Source demonstration collection for the Go benchmark."""
 from __future__ import annotations
+import math
+import multiprocessing
 from typing import Any, Dict, List, Tuple
 import numpy as np
 from .common import GoResetOptions
@@ -388,6 +390,80 @@ def _collect_single_episode(
     return episode, bool(success)
 
 
+def _collect_worker(config: dict) -> dict:
+    """Worker function for parallel source demo collection (must be top-level for pickle)."""
+    worker_id = config["worker_id"]
+    rng = np.random.RandomState(config["seed"])
+    env = create_benchmark_env(
+        seed=config["seed"],
+        environment_name=config["environment_name"],
+        include_image_obs=config["include_image_obs"],
+        camera_height=config["camera_height"],
+        camera_width=config["camera_width"],
+        gnugo_path=config["gnugo_path"],
+        action_scale=config["action_scale"],
+        success_hold_steps=config["success_hold_steps"],
+        drive_physical_arm=config["drive_physical_arm"],
+        enable_opponent_moves=config["enable_opponent_moves"],
+        opening_with_opponent=config["opening_with_opponent"],
+        render_carried_stone=config["render_carried_stone"],
+        render_eef_overlay=config["render_eef_overlay"],
+        eef_overlay_trail=config["eef_overlay_trail"],
+        robot=config["robot"],
+        gripper_types=config["gripper_types"],
+    )
+    env_interface = MG_GoJacoSingleMove(env=env)
+
+    episodes: List[EpisodeRecord] = []
+    attempts = 0
+    max_attempts = config["num_demos"] * config["max_attempts_per_demo"]
+
+    while (len(episodes) < config["num_demos"]) and (attempts < max_attempts):
+        attempts += 1
+        print(
+            f"[collect][worker {worker_id}] attempt {attempts}/{max_attempts} "
+            f"demos={len(episodes)}/{config['num_demos']}",
+            flush=True,
+        )
+
+        stone_color = rng.choice(["black", "white"])
+        opening_moves = int(rng.randint(config["opening_moves_min"], config["opening_moves_max"] + 1))
+        env.reset(options=GoResetOptions(opening_moves=opening_moves, stone_color=stone_color))
+
+        episode, success = _collect_single_episode(
+            env=env,
+            env_interface=env_interface,
+            controller_divisor=config["controller_divisor"],
+            detour_steps=config["detour_steps"],
+            detour_radius=config["detour_radius"],
+            approach_steps=config["approach_steps"],
+            press_steps=config["press_steps"],
+            retreat_steps=config["retreat_steps"],
+            side_transfer_steps=config["side_transfer_steps"],
+            side_margin=config["side_margin"],
+            recovery_steps=config["recovery_steps"],
+        )
+
+        if success:
+            episode.extras["stone_color"] = stone_color
+            episodes.append(episode)
+            print(
+                f"[collect][worker {worker_id}] success demos={len(episodes)}/{config['num_demos']} "
+                f"steps={int(episode.actions.shape[0])} color={stone_color}",
+                flush=True,
+            )
+        else:
+            print(f"[collect][worker {worker_id}] attempt failed", flush=True)
+
+    return {
+        "episodes": episodes,
+        "attempts": attempts,
+        "env_meta": env.serialize(),
+        "env_interface_name": type(env_interface).__name__,
+        "env_interface_type": type(env_interface).INTERFACE_TYPE,
+    }
+
+
 def collect_source_demonstrations(
     output_path: str,
     environment_name: str = "go_7x7",
@@ -419,10 +495,87 @@ def collect_source_demonstrations(
     eef_overlay_trail: int = 10,
     robot: str = "Panda",
     gripper_types: str = "default",
+    num_workers: int = 1,
 ) -> Dict[str, object]:
     """Collect source demonstrations for MimicGen using scripted control."""
     if num_demos <= 0:
         raise ValueError("num_demos must be > 0")
+
+    if num_workers > 1:
+        per_worker = math.ceil(num_demos / num_workers)
+        worker_configs = []
+        for i in range(num_workers):
+            worker_configs.append({
+                "worker_id": i,
+                "num_demos": per_worker,
+                "max_attempts_per_demo": max_attempts_per_demo,
+                "seed": seed + i,
+                "opening_moves_min": opening_moves_min,
+                "opening_moves_max": opening_moves_max,
+                "environment_name": environment_name,
+                "include_image_obs": include_image_obs,
+                "camera_height": camera_height,
+                "camera_width": camera_width,
+                "gnugo_path": gnugo_path,
+                "action_scale": action_scale,
+                "success_hold_steps": success_hold_steps,
+                "drive_physical_arm": drive_physical_arm,
+                "enable_opponent_moves": enable_opponent_moves,
+                "opening_with_opponent": opening_with_opponent,
+                "render_carried_stone": render_carried_stone,
+                "render_eef_overlay": render_eef_overlay,
+                "eef_overlay_trail": eef_overlay_trail,
+                "robot": robot,
+                "gripper_types": gripper_types,
+                "controller_divisor": controller_divisor,
+                "detour_steps": detour_steps,
+                "detour_radius": detour_radius,
+                "approach_steps": approach_steps,
+                "press_steps": press_steps,
+                "retreat_steps": retreat_steps,
+                "side_transfer_steps": side_transfer_steps,
+                "side_margin": side_margin,
+                "recovery_steps": recovery_steps,
+            })
+
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Pool(num_workers) as pool:
+            results = pool.map(_collect_worker, worker_configs)
+
+        episodes: List[EpisodeRecord] = []
+        total_attempts = 0
+        for r in results:
+            episodes.extend(r["episodes"])
+            total_attempts += r["attempts"]
+        episodes = episodes[:num_demos]
+
+        if len(episodes) < num_demos:
+            raise RuntimeError(
+                f"failed to collect requested demos: got {len(episodes)} / {num_demos} "
+                f"after {total_attempts} attempts across {num_workers} workers"
+            )
+
+        env_meta = results[0]["env_meta"]
+        env_interface_name = results[0]["env_interface_name"]
+        env_interface_type = results[0]["env_interface_type"]
+
+        write_dataset(
+            output_path=output_path,
+            episodes=episodes,
+            env_meta=env_meta,
+            env_interface_name=env_interface_name,
+            env_interface_type=env_interface_type,
+        )
+
+        return {
+            "output_path": output_path,
+            "num_demos": len(episodes),
+            "attempts": total_attempts,
+            "success_rate": float(len(episodes) / total_attempts),
+            "env_interface": env_interface_name,
+            "env_interface_type": env_interface_type,
+            "num_workers": num_workers,
+        }
 
     rng = np.random.RandomState(seed)
     env = create_benchmark_env(
@@ -456,8 +609,9 @@ def collect_source_demonstrations(
             flush=True,
         )
 
+        stone_color = rng.choice(["black", "white"])
         opening_moves = int(rng.randint(opening_moves_min, opening_moves_max + 1))
-        env.reset(options=GoResetOptions(opening_moves=opening_moves))
+        env.reset(options=GoResetOptions(opening_moves=opening_moves, stone_color=stone_color))
 
         episode, success = _collect_single_episode(
             env=env,
@@ -474,10 +628,11 @@ def collect_source_demonstrations(
         )
 
         if success:
+            episode.extras["stone_color"] = stone_color
             episodes.append(episode)
             print(
                 f"[collect] success demos={len(episodes)}/{num_demos} "
-                f"steps={int(episode.actions.shape[0])}",
+                f"steps={int(episode.actions.shape[0])} color={stone_color}",
                 flush=True,
             )
         else:
