@@ -13,7 +13,7 @@ import tensorflow_datasets as tfds
 _DESCRIPTION = """\
 Go VLA benchmark demonstrations for fine-tuning vision-language-action models.
 Each episode is a single stone placement on a 5x5 Go board using a robot arm
-with OSC position control (4-DoF actions padded to 7-DoF).
+with 4-DoF actions (3 position + 1 gripper).
 """
 
 _CITATION = ""
@@ -23,10 +23,10 @@ _DEFAULT_HDF5_PATH = str(
 )
 
 _INSTRUCTION_TEMPLATES = [
-    "Place a black stone on the Go board at row {r}, column {c}.",
-    "Put a black stone at position ({r}, {c}) on the Go board.",
-    "Move the black stone to row {r}, column {c} on the board.",
-    "Set a black stone at ({r}, {c}).",
+    "Place a {color} stone on the Go board at row {r}, column {c}.",
+    "Put a {color} stone at position ({r}, {c}) on the Go board.",
+    "Move the {color} stone to row {r}, column {c} on the board.",
+    "Set a {color} stone at ({r}, {c}).",
 ]
 
 _USE_EMBED_DIM = 512
@@ -41,25 +41,36 @@ _NOOP_THRESHOLD = 1e-4
 def _derive_target_from_board_state(board_state: np.ndarray) -> tuple[int, int]:
     """Derive the target (row, col) from the board_state difference.
 
-    board_state has shape (T, 5, 5, 4). Channel 1 encodes black stones.
-    We compare the first and last timestep to find the newly placed stone.
+    board_state has shape (T, 5, 5, 4). Channel 1 encodes black stones,
+    channel 2 encodes white stones. We check both to find the newly placed stone.
     """
-    ch = 1  # black stone channel
+    for ch in [1, 2]:
+        diff = board_state[-1, :, :, ch] - board_state[0, :, :, ch]
+        if diff.max() > 0.5:
+            idx = np.argmax(diff)
+            row, col = divmod(int(idx), board_state.shape[2])
+            return row, col
+    # Fallback: channel 1
+    ch = 1
     diff = board_state[-1, :, :, ch] - board_state[0, :, :, ch]
-    # Find the cell with the largest positive change
     idx = np.argmax(diff)
     row, col = divmod(int(idx), board_state.shape[2])
     return row, col
 
 
-def _pad_action_4to7(actions: np.ndarray) -> np.ndarray:
-    """Pad (T, 4) actions to (T, 7): [dx,dy,dz, 0,0,0, gripper]."""
-    t = actions.shape[0]
-    padded = np.zeros((t, 7), dtype=np.float32)
-    padded[:, :3] = actions[:, :3]      # xyz deltas
-    # dims 3-5 stay zero (rotation deltas)
-    padded[:, 6] = actions[:, 3]        # gripper
-    return padded
+def _extract_action_4d(actions: np.ndarray) -> np.ndarray:
+    """Extract 4D actions [dx, dy, dz, gripper] from any source format.
+
+    Handles both legacy 4D (T, 4) and 7D (T, 7) HDF5 formats.
+    """
+    if actions.shape[1] >= 7:
+        # 7D format: [dx,dy,dz, dax,day,daz, gripper] -> [dx,dy,dz, gripper]
+        out = np.zeros((actions.shape[0], 4), dtype=np.float32)
+        out[:, :3] = actions[:, :3]
+        out[:, 3] = actions[:, 6]
+        return out
+    # Already 4D: [dx, dy, dz, gripper]
+    return actions[:, :4].astype(np.float32)
 
 
 def _compute_use_embedding(text: str) -> np.ndarray:
@@ -80,13 +91,24 @@ def _compute_use_embedding(text: str) -> np.ndarray:
 class Builder(tfds.core.GeneratorBasedBuilder):
     """TFDS builder for Go VLA demonstrations."""
 
-    VERSION = tfds.core.Version("1.1.0")
+    VERSION = tfds.core.Version("3.0.0")
     RELEASE_NOTES = {
-        "1.0.0": "Initial release.",
+        "1.0.0": "Initial release (7-DoF padded actions, 20 Hz).",
         "1.1.0": "Downsample to ~5 Hz and filter no-op actions.",
+        "2.0.0": "Native 4-DoF actions (dx,dy,dz,gripper), ~5 Hz, no-op filtered.",
+        "3.0.0": "Gripper {-1,+1}, stone color support, dynamic image resolution, both-color board detection.",
     }
 
     def _info(self) -> tfds.core.DatasetInfo:
+        # Read image resolution from the HDF5 to avoid hardcoding.
+        hdf5_path = os.environ.get("GO_VLA_HDF5_PATH", _DEFAULT_HDF5_PATH)
+        try:
+            with h5py.File(hdf5_path, "r") as f:
+                first_key = sorted(f["data"].keys(), key=lambda k: int(k.split("_")[1]))[0]
+                img_shape = tuple(f[f"data/{first_key}/obs/agentview_image"].shape[1:])
+        except Exception:
+            img_shape = (256, 256, 3)
+
         return self.dataset_info_from_configs(
             features=tfds.features.FeaturesDict(
                 {
@@ -95,7 +117,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                             "observation": tfds.features.FeaturesDict(
                                 {
                                     "image": tfds.features.Image(
-                                        shape=(256, 256, 3),
+                                        shape=img_shape,
                                         dtype=np.uint8,
                                         encoding_format="png",
                                     ),
@@ -105,7 +127,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                                 }
                             ),
                             "action": tfds.features.Tensor(
-                                shape=(7,), dtype=np.float32
+                                shape=(4,), dtype=np.float32
                             ),
                             "reward": np.float32,
                             "discount": np.float32,
@@ -151,23 +173,27 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                     ep["obs/board_state"], dtype=np.float32
                 )
 
-                actions_7 = _pad_action_4to7(actions_4)
+                actions_4dof = _extract_action_4d(actions_4)
+                # Remap gripper from {0, 1} to {-1, +1} to match LIBERO/OpenVLA convention
+                actions_4dof[:, 3] = 2.0 * actions_4dof[:, 3] - 1.0
                 row, col = _derive_target_from_board_state(board_state)
+
+                stone_color = ep["stone_color"][()].decode() if "stone_color" in ep else "black"
 
                 rng = np.random.RandomState(seed=demo_idx)
                 template = _INSTRUCTION_TEMPLATES[
                     rng.randint(len(_INSTRUCTION_TEMPLATES))
                 ]
-                instruction = template.format(r=row, c=col)
+                instruction = template.format(color=stone_color, r=row, c=col)
                 embedding = _compute_use_embedding(instruction)
 
                 # Downsample to ~5 Hz and filter no-op actions
                 keep = []
-                for t in range(0, actions_7.shape[0], _SUBSAMPLE_STRIDE):
-                    if np.linalg.norm(actions_7[t, :3]) >= _NOOP_THRESHOLD:
+                for t in range(0, actions_4dof.shape[0], _SUBSAMPLE_STRIDE):
+                    if np.linalg.norm(actions_4dof[t, :3]) >= _NOOP_THRESHOLD:
                         keep.append(t)
                 # Always keep last step for terminal signal
-                last_t = actions_7.shape[0] - 1
+                last_t = actions_4dof.shape[0] - 1
                 if last_t not in keep:
                     keep.append(last_t)
 
@@ -181,7 +207,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                                 "image": images[t],
                                 "state": eef_pos[t],
                             },
-                            "action": actions_7[t],
+                            "action": actions_4dof[t],
                             "reward": 1.0 if is_last else 0.0,
                             "discount": 1.0,
                             "is_first": i == 0,
