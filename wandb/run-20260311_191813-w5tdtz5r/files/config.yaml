@@ -1,0 +1,82 @@
+_wandb:
+    value:
+        cli_version: 0.25.0
+        e:
+            f1tax0zidcvbxpig47n95hodflwauol6:
+                args:
+                    - adapter_path=outputs/2026-03-11/16-18-14/checkpoints/latest
+                codePath: run_benchmark.py
+                codePathLocal: run_benchmark.py
+                cpu_count: 12
+                cpu_count_logical: 24
+                cudaVersion: "13.1"
+                disk:
+                    /:
+                        total: "93467680768"
+                        used: "83450380288"
+                email: m.w.jarosz@student.tudelft.nl
+                executable: /home/marcin/miniforge3/envs/mujogo/bin/python
+                git:
+                    commit: 5b4c73229ef6c54815917b222429248115d14178
+                    remote: git@github.com:squarerootminusone/dsait4125.git
+                gpu: NVIDIA GeForce RTX 5080
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Blackwell
+                      cudaCores: 10752
+                      memoryTotal: "17094934528"
+                      name: NVIDIA GeForce RTX 5080
+                      uuid: GPU-9d9f217c-1e52-fcfa-8f89-e60cbb2b5c3d
+                host: archlinux
+                memory:
+                    total: "64824418304"
+                os: Linux-6.18.9-arch1-2-x86_64-with-glibc2.43
+                program: /home/marcin/Projects/dsait4125/run_benchmark.py
+                python: CPython 3.11.14
+                root: /home/marcin/Projects/dsait4125
+                startedAt: "2026-03-11T18:18:13.074472Z"
+                writerId: f1tax0zidcvbxpig47n95hodflwauol6
+        m: []
+        python_version: 3.11.14
+        t:
+            "1":
+                - 2
+                - 3
+                - 50
+            "2":
+                - 1
+                - 2
+                - 3
+                - 11
+                - 41
+                - 49
+                - 50
+                - 63
+                - 71
+                - 98
+            "3":
+                - 2
+                - 16
+            "4": 3.11.14
+            "5": 0.25.0
+            "8":
+                - 2
+            "12": 0.25.0
+            "13": linux-x86_64
+adapter_path:
+    value: outputs/2026-03-11/16-18-14/checkpoints/latest
+data_dir:
+    value: ~/tensorflow_datasets
+output_dir:
+    value: benchmark_output
+success_threshold:
+    value: 0.05
+video_fps:
+    value: 5
+vla_path:
+    value: openvla/openvla-7b
+wandb:
+    value:
+        entity: null
+        project: openvla
+        run_name: null

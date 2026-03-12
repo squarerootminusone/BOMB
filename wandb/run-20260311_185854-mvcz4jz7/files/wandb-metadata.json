@@ -1,0 +1,43 @@
+{
+  "os":  "Linux-6.18.9-arch1-2-x86_64-with-glibc2.43",
+  "python":  "CPython 3.11.14",
+  "startedAt":  "2026-03-11T17:58:54.243965Z",
+  "args":  [
+    "adapter_path=outputs/2026-03-11/16-18-14/checkpoints/best"
+  ],
+  "program":  "/home/marcin/Projects/dsait4125/run_benchmark.py",
+  "codePath":  "run_benchmark.py",
+  "codePathLocal":  "run_benchmark.py",
+  "git":  {
+    "remote":  "git@github.com:squarerootminusone/dsait4125.git",
+    "commit":  "5b4c73229ef6c54815917b222429248115d14178"
+  },
+  "email":  "m.w.jarosz@student.tudelft.nl",
+  "root":  "/home/marcin/Projects/dsait4125",
+  "host":  "archlinux",
+  "executable":  "/home/marcin/miniforge3/envs/mujogo/bin/python",
+  "cpu_count":  12,
+  "cpu_count_logical":  24,
+  "gpu":  "NVIDIA GeForce RTX 5080",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "93467680768",
+      "used":  "83441991680"
+    }
+  },
+  "memory":  {
+    "total":  "64824418304"
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce RTX 5080",
+      "memoryTotal":  "17094934528",
+      "cudaCores":  10752,
+      "architecture":  "Blackwell",
+      "uuid":  "GPU-9d9f217c-1e52-fcfa-8f89-e60cbb2b5c3d"
+    }
+  ],
+  "cudaVersion":  "13.1",
+  "writerId":  "fc7617pgwdrxqeznivpclmnslynmss9m"
+}

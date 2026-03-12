@@ -1,0 +1,194 @@
+Loading RLDS episodes...
+[2026-03-11 19:18:15,212][absl][INFO] - Load dataset info from /home/marcin/tensorflow_datasets/go_vla_dataset/3.0.0
+[2026-03-11 19:18:15,216][absl][INFO] - Creating a tf.data.Dataset reading 2 files located in folders: /home/marcin/tensorflow_datasets/go_vla_dataset/3.0.0.
+[2026-03-11 19:18:15,423][absl][INFO] - Constructing tf.data.Dataset go_vla_dataset for split train, from /home/marcin/tensorflow_datasets/go_vla_dataset/3.0.0
+Loaded 40 episodes.
+Loading base OpenVLA model (this takes a minute)...
+Loading checkpoint shards: 100%|███████████████████████████████████████████| 3/3 [00:01<00:00,  1.59it/s]
+Base model loaded.
+Loaded dataset stats from /home/marcin/Projects/dsait4125/outputs/2026-03-11/16-18-14/checkpoints/latest/dataset_statistics.json (keys: ['go_vla_dataset'])
+LoRA adapter loaded from /home/marcin/Projects/dsait4125/outputs/2026-03-11/16-18-14/checkpoints/latest
+Episode 0/39: Put a black stone at position (1, 1) on the Go board.
+  frame 44/44
+  L1 total=0.0403  x=0.0062 y=0.0292 z=0.0314 grip=0.0945
+  Token acc=0.642  success=True
+Episode 1/39: Set a black stone at (3, 1).
+  frame 44/44
+  L1 total=0.0604  x=0.0134 y=0.0362 z=0.0521 grip=0.1398
+  Token acc=0.562  success=False
+Episode 2/39: Place a black stone on the Go board at row 4, column 3.
+  frame 46/46
+  L1 total=0.0500  x=0.0129 y=0.0204 z=0.0328 grip=0.1338
+  Token acc=0.625  success=True
+Episode 3/39: Move the black stone to row 0, column 2 on the board.
+  frame 45/45
+  L1 total=0.0412  x=0.0151 y=0.0186 z=0.0387 grip=0.0925
+  Token acc=0.600  success=True
+Episode 4/39: Place a black stone on the Go board at row 4, column 4.
+  frame 48/48
+  L1 total=0.0589  x=0.0061 y=0.0154 z=0.0440 grip=0.1699
+  Token acc=0.562  success=False
+Episode 5/39: Move the black stone to row 1, column 1 on the board.
+  frame 44/44
+  L1 total=0.0551  x=0.0595 y=0.0377 z=0.0287 grip=0.0945
+  Token acc=0.540  success=False
+Episode 6/39: Move the black stone to row 0, column 1 on the board.
+  frame 44/44
+  L1 total=0.0360  x=0.0171 y=0.0149 z=0.0630 grip=0.0492
+  Token acc=0.619  success=True
+Episode 7/39: Move the black stone to row 0, column 2 on the board.
+  frame 45/45
+  L1 total=0.0517  x=0.0227 y=0.0256 z=0.0662 grip=0.0925
+  Token acc=0.533  success=False
+Episode 8/39: Put a black stone at position (2, 0) on the Go board.
+  frame 44/44
+  L1 total=0.0811  x=0.0326 y=0.0232 z=0.0836 grip=0.1850
+  Token acc=0.534  success=False
+Episode 9/39: Set a black stone at (1, 2).
+  frame 45/45
+  L1 total=0.0834  x=0.0579 y=0.0227 z=0.0721 grip=0.1810
+  Token acc=0.544  success=False
+Episode 10/39: Place a black stone on the Go board at row 0, column 2.
+  frame 45/45
+  L1 total=0.0696  x=0.0381 y=0.0542 z=0.0494 grip=0.1367
+  Token acc=0.578  success=False
+Episode 11/39: Put a black stone at position (0, 0) on the Go board.
+  frame 44/44
+  L1 total=0.1075  x=0.0469 y=0.0201 z=0.0875 grip=0.2756
+  Token acc=0.511  success=False
+Episode 12/39: Set a black stone at (3, 3).
+  frame 46/46
+  L1 total=0.0772  x=0.0807 y=0.0306 z=0.0637 grip=0.1338
+  Token acc=0.533  success=False
+Episode 13/39: Put a black stone at position (4, 4) on the Go board.
+  frame 48/48
+  L1 total=0.0645  x=0.0441 y=0.0157 z=0.0697 grip=0.1284
+  Token acc=0.464  success=False
+Episode 14/39: Set a black stone at (3, 1).
+  frame 44/44
+  L1 total=0.0893  x=0.0535 y=0.0434 z=0.0754 grip=0.1850
+  Token acc=0.580  success=False
+Episode 15/39: Put a black stone at position (4, 2) on the Go board.
+  frame 45/45
+  L1 total=0.0818  x=0.0958 y=0.0649 z=0.0742 grip=0.0925
+  Token acc=0.522  success=False
+Episode 16/39: Set a black stone at (1, 1).
+  frame 44/44
+  L1 total=0.0564  x=0.0138 y=0.0084 z=0.0636 grip=0.1398
+  Token acc=0.653  success=False
+Episode 17/39: Put a black stone at position (4, 4) on the Go board.
+  frame 48/48
+  L1 total=0.0556  x=0.0092 y=0.0245 z=0.0187 grip=0.1699
+  Token acc=0.557  success=False
+Episode 18/39: Move the black stone to row 0, column 3 on the board.
+  frame 46/46
+  L1 total=0.0353  x=0.0168 y=0.0150 z=0.0623 grip=0.0472
+  Token acc=0.560  success=True
+Episode 19/39: Set a black stone at (0, 0).
+  frame 44/44
+  L1 total=0.0687  x=0.0633 y=0.0455 z=0.0716 grip=0.0945
+  Token acc=0.528  success=False
+Episode 20/39: Move the black stone to row 4, column 3 on the board.
+  frame 46/46
+  L1 total=0.0524  x=0.0134 y=0.0274 z=0.0350 grip=0.1338
+  Token acc=0.565  success=False
+Episode 21/39: Set a black stone at (4, 0).
+  frame 44/44
+  L1 total=0.0855  x=0.0667 y=0.0263 z=0.0640 grip=0.1850
+  Token acc=0.466  success=False
+Episode 22/39: Set a black stone at (2, 1).
+  frame 44/44
+  L1 total=0.0630  x=0.0379 y=0.0075 z=0.0669 grip=0.1398
+  Token acc=0.625  success=False
+Episode 23/39: Put a black stone at position (1, 2) on the Go board.
+  frame 45/45
+  L1 total=0.0548  x=0.0315 y=0.0273 z=0.0680 grip=0.0925
+  Token acc=0.544  success=False
+Episode 24/39: Set a black stone at (0, 4).
+  frame 48/48
+  L1 total=0.0662  x=0.0343 y=0.0226 z=0.0379 grip=0.1699
+  Token acc=0.562  success=False
+Episode 25/39: Put a black stone at position (0, 4) on the Go board.
+  frame 48/48
+  L1 total=0.0727  x=0.0162 y=0.0245 z=0.0386 grip=0.2114
+  Token acc=0.547  success=False
+Episode 26/39: Set a black stone at (0, 1).
+  frame 44/44
+  L1 total=0.0579  x=0.0190 y=0.0205 z=0.0526 grip=0.1398
+  Token acc=0.580  success=False
+Episode 27/39: Put a black stone at position (4, 1) on the Go board.
+  frame 44/44
+  L1 total=0.0380  x=0.0106 y=0.0128 z=0.0343 grip=0.0945
+  Token acc=0.602  success=True
+Episode 28/39: Put a black stone at position (4, 4) on the Go board.
+  frame 48/48
+  L1 total=0.0588  x=0.0106 y=0.0290 z=0.0672 grip=0.1284
+  Token acc=0.516  success=False
+Episode 29/39: Put a black stone at position (2, 3) on the Go board.
+  frame 46/46
+  L1 total=0.0606  x=0.0229 y=0.0125 z=0.0731 grip=0.1338
+  Token acc=0.533  success=False
+Episode 30/39: Set a black stone at (3, 2).
+  frame 45/45
+  L1 total=0.0762  x=0.0424 y=0.0412 z=0.0844 grip=0.1367
+  Token acc=0.511  success=False
+Episode 31/39: Move the black stone to row 2, column 4 on the board.
+  frame 48/48
+  L1 total=0.0823  x=0.0340 y=0.0051 z=0.0631 grip=0.2271
+  Token acc=0.526  success=False
+Episode 32/39: Put a black stone at position (3, 3) on the Go board.
+  frame 46/46
+  L1 total=0.0394  x=0.0082 y=0.0278 z=0.0310 grip=0.0905
+  Token acc=0.614  success=True
+Episode 33/39: Put a black stone at position (2, 3) on the Go board.
+  frame 46/46
+  L1 total=0.0712  x=0.0410 y=0.0186 z=0.0479 grip=0.1772
+  Token acc=0.500  success=False
+Episode 34/39: Put a black stone at position (1, 3) on the Go board.
+  frame 46/46
+  L1 total=0.0428  x=0.0185 y=0.0124 z=0.0499 grip=0.0905
+  Token acc=0.571  success=True
+Episode 35/39: Move the black stone to row 0, column 1 on the board.
+  frame 45/45
+  L1 total=0.0605  x=0.0285 y=0.0195 z=0.0574 grip=0.1367
+  Token acc=0.483  success=False
+Episode 36/39: Put a black stone at position (2, 1) on the Go board.
+  frame 44/44
+  L1 total=0.0594  x=0.0444 y=0.0138 z=0.0396 grip=0.1398
+  Token acc=0.506  success=False
+Episode 37/39: Place a black stone on the Go board at row 4, column 1.
+  frame 44/44
+  L1 total=0.0338  x=0.0092 y=0.0239 z=0.0529 grip=0.0492
+  Token acc=0.540  success=True
+Episode 38/39: Place a black stone on the Go board at row 3, column 1.
+  frame 44/44
+  L1 total=0.0640  x=0.0226 y=0.0515 z=0.0420 grip=0.1398
+  Token acc=0.449  success=False
+Episode 39/39: Put a black stone at position (3, 3) on the Go board.
+  frame 46/46
+  L1 total=0.0551  x=0.0206 y=0.0334 z=0.0325 grip=0.1338
+  Token acc=0.440  success=False
+
+=== Aggregate metrics (40 episodes) ===
+  mean_l1_x: 0.0310
+  std_l1_x: 0.0214
+  mean_l1_y: 0.0256
+  std_l1_y: 0.0130
+  mean_l1_z: 0.0547
+  std_l1_z: 0.0174
+  mean_l1_gripper: 0.1347
+  std_l1_gripper: 0.0473
+  mean_l1_total: 0.0615
+  std_l1_total: 0.0165
+  mean_token_acc_x: 0.5500
+  std_token_acc_x: 0.0732
+  mean_token_acc_y: 0.5817
+  std_token_acc_y: 0.1120
+  mean_token_acc_z: 0.6121
+  std_token_acc_z: 0.0803
+  mean_token_acc_gripper: 0.4491
+  std_token_acc_gripper: 0.0191
+  mean_token_acc_total: 0.5482
+  std_token_acc_total: 0.0503
+  success_rate: 0.2250
+  num_success: 9.0000

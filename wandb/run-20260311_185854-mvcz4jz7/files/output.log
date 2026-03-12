@@ -1,0 +1,220 @@
+Loading RLDS episodes...
+[2026-03-11 18:58:56,105][absl][INFO] - Load dataset info from /home/marcin/tensorflow_datasets/go_vla_dataset/3.0.0
+[2026-03-11 18:58:56,110][absl][INFO] - Creating a tf.data.Dataset reading 2 files located in folders: /home/marcin/tensorflow_datasets/go_vla_dataset/3.0.0.
+[2026-03-11 18:58:56,327][absl][INFO] - Constructing tf.data.Dataset go_vla_dataset for split train, from /home/marcin/tensorflow_datasets/go_vla_dataset/3.0.0
+Loaded 40 episodes.
+Loading base OpenVLA model (this takes a minute)...
+Loading checkpoint shards: 100%|███████████████████████████████████████████| 3/3 [00:01<00:00,  1.56it/s]
+Base model loaded.
+Loaded dataset stats from outputs/2026-03-11/16-18-14/checkpoints/best/dataset_statistics.json (keys: ['go_vla_dataset'])
+LoRA adapter loaded from outputs/2026-03-11/16-18-14/checkpoints/best
+Episode 0/39: Put a black stone at position (1, 1) on the Go board.
+  frame 44/44
+  L1 total=0.0899  x=0.0221 y=0.0334 z=0.0740 grip=0.2303
+  Token acc=0.455  success=False
+Episode 1/39: Set a black stone at (3, 1).
+  frame 44/44
+  L1 total=0.0772  x=0.0352 y=0.0337 z=0.0551 grip=0.1850
+  Token acc=0.489  success=False
+Episode 2/39: Place a black stone on the Go board at row 4, column 3.
+  frame 46/46
+  L1 total=0.0932  x=0.0189 y=0.0315 z=0.0587 grip=0.2638
+  Token acc=0.478  success=False
+Episode 3/39: Move the black stone to row 0, column 2 on the board.
+  frame 45/45
+  L1 total=0.1271  x=0.0767 y=0.0671 z=0.0950 grip=0.2695
+  Token acc=0.367  success=False
+Episode 4/39: Place a black stone on the Go board at row 4, column 4.
+  frame 48/48
+  L1 total=0.0572  x=0.0439 y=0.0384 z=0.0179 grip=0.1284
+  Token acc=0.495  success=False
+Episode 5/39: Move the black stone to row 1, column 1 on the board.
+  frame 44/44
+  L1 total=0.1489  x=0.1848 y=0.1037 z=0.0769 grip=0.2303
+  Token acc=0.386  success=False
+Episode 6/39: Move the black stone to row 0, column 1 on the board.
+  frame 44/44
+  L1 total=0.0849  x=0.0463 y=0.0535 z=0.1000 grip=0.1398
+  Token acc=0.443  success=False
+Episode 7/39: Move the black stone to row 0, column 2 on the board.
+  frame 45/45
+  L1 total=0.1009  x=0.0528 y=0.0390 z=0.0864 grip=0.2253
+  Token acc=0.394  success=False
+Episode 8/39: Put a black stone at position (2, 0) on the Go board.
+  frame 44/44
+  L1 total=0.1136  x=0.0483 y=0.0277 z=0.1030 grip=0.2756
+  Token acc=0.415  success=False
+Episode 9/39: Set a black stone at (1, 2).
+  frame 45/45
+  L1 total=0.1113  x=0.0864 y=0.0536 z=0.0800 grip=0.2253
+  Token acc=0.439  success=False
+Episode 10/39: Place a black stone on the Go board at row 0, column 2.
+  frame 45/45
+  L1 total=0.1322  x=0.0595 y=0.0882 z=0.0673 grip=0.3138
+  Token acc=0.344  success=False
+Episode 11/39: Put a black stone at position (0, 0) on the Go board.
+  frame 44/44
+  L1 total=0.1130  x=0.0595 y=0.0810 z=0.0812 grip=0.2303
+  Token acc=0.392  success=False
+Episode 12/39: Set a black stone at (3, 3).
+  frame 46/46
+  L1 total=0.0953  x=0.0874 y=0.0448 z=0.0721 grip=0.1772
+  Token acc=0.418  success=False
+Episode 13/39: Put a black stone at position (4, 4) on the Go board.
+  frame 48/48
+  L1 total=0.0890  x=0.0667 y=0.0481 z=0.0714 grip=0.1699
+  Token acc=0.339  success=False
+Episode 14/39: Set a black stone at (3, 1).
+  frame 44/44
+  L1 total=0.0977  x=0.0304 y=0.0726 z=0.0576 grip=0.2303
+  Token acc=0.466  success=False
+Episode 15/39: Put a black stone at position (4, 2) on the Go board.
+  frame 45/45
+  L1 total=0.0760  x=0.0634 y=0.0702 z=0.0778 grip=0.0925
+  Token acc=0.383  success=False
+Episode 16/39: Set a black stone at (1, 1).
+  frame 44/44
+  L1 total=0.0776  x=0.0205 y=0.0369 z=0.0681 grip=0.1850
+  Token acc=0.534  success=False
+Episode 17/39: Put a black stone at position (4, 4) on the Go board.
+  frame 48/48
+  L1 total=0.1013  x=0.0288 y=0.0213 z=0.0606 grip=0.2944
+  Token acc=0.401  success=False
+Episode 18/39: Move the black stone to row 0, column 3 on the board.
+  frame 46/46
+  L1 total=0.0972  x=0.0486 y=0.0559 z=0.0639 grip=0.2205
+  Token acc=0.462  success=False
+Episode 19/39: Set a black stone at (0, 0).
+  frame 44/44
+  L1 total=0.0830  x=0.0613 y=0.0555 z=0.0754 grip=0.1398
+  Token acc=0.381  success=False
+Episode 20/39: Move the black stone to row 4, column 3 on the board.
+  frame 46/46
+  L1 total=0.0751  x=0.0309 y=0.0407 z=0.0516 grip=0.1772
+  Token acc=0.435  success=False
+Episode 21/39: Set a black stone at (4, 0).
+  frame 44/44
+  L1 total=0.1047  x=0.0863 y=0.0670 z=0.0803 grip=0.1850
+  Token acc=0.420  success=False
+Episode 22/39: Set a black stone at (2, 1).
+  frame 44/44
+  L1 total=0.0874  x=0.0226 y=0.0132 z=0.0834 grip=0.2303
+  Token acc=0.466  success=False
+Episode 23/39: Put a black stone at position (1, 2) on the Go board.
+  frame 45/45
+  L1 total=0.1048  x=0.0704 y=0.0226 z=0.1009 grip=0.2253
+  Token acc=0.383  success=False
+Episode 24/39: Set a black stone at (0, 4).
+  frame 12/48
+Traceback (most recent call last):
+  File "/home/marcin/Projects/dsait4125/run_benchmark.py", line 200, in <module>
+    main()
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/hydra/main.py", line 94, in decorated_main
+    _run_hydra(
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/hydra/_internal/utils.py", line 394, in _run_hydra
+    _run_app(
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/hydra/_internal/utils.py", line 457, in _run_app
+    run_and_report(
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/hydra/_internal/utils.py", line 220, in run_and_report
+    return func()
+           ^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/hydra/_internal/utils.py", line 458, in <lambda>
+    lambda: hydra.run(
+            ^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/hydra/_internal/hydra.py", line 119, in run
+    ret = run_job(
+          ^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/hydra/core/utils.py", line 186, in run_job
+    ret.return_value = task_function(task_cfg)
+                       ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/Projects/dsait4125/run_benchmark.py", line 129, in main
+    pred_actions = runner.predict_episode(images, instruction, progress_cb=_progress)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/Projects/dsait4125/viewer.py", line 245, in predict_episode
+    action = self.model.predict_action(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/.cache/huggingface/modules/transformers_modules/openvla/openvla-7b/47a0ec7fc4ec123775a391911046cf33cf9ed83f/modeling_prismatic.py", line 518, in predict_action
+    generated_ids = self.generate(input_ids, max_new_tokens=self.get_action_dim(unnorm_key), **kwargs)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/transformers/generation/utils.py", line 1576, in generate
+    result = self._greedy_search(
+             ^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/transformers/generation/utils.py", line 2494, in _greedy_search
+    outputs = self(
+              ^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/accelerate/hooks.py", line 169, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/.cache/huggingface/modules/transformers_modules/openvla/openvla-7b/47a0ec7fc4ec123775a391911046cf33cf9ed83f/modeling_prismatic.py", line 404, in forward
+    language_model_output = self.language_model(
+                            ^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/accelerate/hooks.py", line 169, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/transformers/models/llama/modeling_llama.py", line 1208, in forward
+    outputs = self.model(
+              ^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/accelerate/hooks.py", line 169, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/transformers/models/llama/modeling_llama.py", line 1018, in forward
+    layer_outputs = decoder_layer(
+                    ^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/accelerate/hooks.py", line 169, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/transformers/models/llama/modeling_llama.py", line 741, in forward
+    hidden_states, self_attn_weights, present_key_value = self.self_attn(
+                                                          ^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/accelerate/hooks.py", line 169, in new_forward
+    output = module._old_forward(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/transformers/models/llama/modeling_llama.py", line 644, in forward
+    cos, sin = self.rotary_emb(value_states, position_ids)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1776, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1787, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/marcin/miniforge3/envs/mujogo/lib/python3.11/site-packages/transformers/models/llama/modeling_llama.py", line 144, in forward
+    sin = emb.sin()
+          ^^^^^^^^^
+KeyboardInterrupt
