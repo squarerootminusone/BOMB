@@ -127,6 +127,7 @@ def _collect_single_episode(
     side_transfer_steps: int,
     side_margin: float,
     recovery_steps: int,
+    hover_height_noise: float = 0.0,
 ) -> Tuple[EpisodeRecord, bool]:
     """Execute one scripted pick-and-place episode, returning the recorded trajectory."""
     initial_state = env.get_state()
@@ -143,7 +144,11 @@ def _collect_single_episode(
         else target_xyz.copy()
     )
     hover_xyz = target_xyz.copy()
-    hover_xyz[2] = max(env.hover_height * 0.7, env.press_height + 0.05)
+    hover_xyz[2] = max(env.hover_height * 0.6, env.press_height + 0.05)
+    if hover_height_noise > 0.0:
+        rng = getattr(env, "_rng", np.random.RandomState())
+        noise_factor = 1.0 + rng.uniform(-hover_height_noise * 0.5, hover_height_noise * 0.5)
+        hover_xyz[2] = max(hover_xyz[2] * noise_factor, env.press_height + 0.05)
     if side_transfer_steps > 0:
         side_hover_xyz = _compute_side_hover_xyz(
             env=env,
@@ -153,7 +158,10 @@ def _collect_single_episode(
 
     # Release height: clear the board surface (2× board_thickness) plus
     # existing stones and finger clearance (3× stone_height).
-    release_z = env.table_top_z + env.board_thickness * 2 + env.stone_height * 3
+    release_z = env.table_top_z + env.board_thickness * 1.5 + env.stone_height * 3
+    if hover_height_noise > 0.0:
+        rng = getattr(env, "_rng", np.random.RandomState())
+        release_z += rng.uniform(-0.01, 0.01)
 
     press_xyz = target_xyz.copy()
     press_xyz[2] = release_z
@@ -442,6 +450,7 @@ def _collect_worker(config: dict) -> dict:
             side_transfer_steps=config["side_transfer_steps"],
             side_margin=config["side_margin"],
             recovery_steps=config["recovery_steps"],
+            hover_height_noise=config.get("hover_height_noise", 0.0),
         )
 
         if success:
@@ -496,6 +505,7 @@ def collect_source_demonstrations(
     robot: str = "Panda",
     gripper_types: str = "default",
     num_workers: int = 1,
+    hover_height_noise: float = 0.0,
 ) -> Dict[str, object]:
     """Collect source demonstrations for MimicGen using scripted control."""
     if num_demos <= 0:
@@ -536,6 +546,7 @@ def collect_source_demonstrations(
                 "side_transfer_steps": side_transfer_steps,
                 "side_margin": side_margin,
                 "recovery_steps": recovery_steps,
+                "hover_height_noise": hover_height_noise,
             })
 
         ctx = multiprocessing.get_context("spawn")
@@ -625,6 +636,7 @@ def collect_source_demonstrations(
             side_transfer_steps=side_transfer_steps,
             side_margin=side_margin,
             recovery_steps=recovery_steps,
+            hover_height_noise=hover_height_noise,
         )
 
         if success:
