@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import xml.etree.ElementTree as ET
 
 import numpy as np
 
@@ -21,7 +23,7 @@ import tempfile
 from robosuite.controllers import load_composite_controller_config
 from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
 from robosuite.models.arenas import TableArena
-from robosuite.models.objects import CylinderObject
+from robosuite.models.objects import MujocoXMLObject
 from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.mjcf_utils import new_geom
 
@@ -86,6 +88,89 @@ class _OpenSpielGoLogic:
         return self._moves.copy()
 
 
+class _GoStoneObject(MujocoXMLObject):
+    """Go stone with separate visual and collision geoms plus explicit inertial data."""
+
+    def __init__(
+        self,
+        name: str,
+        visual_radius: float,
+        visual_half_height: float,
+        collision_radius: float,
+        collision_half_height: float,
+        mass: float,
+        rgba: List[float],
+    ):
+        a = float(collision_radius)
+        c = float(collision_half_height)
+        stone_mass = float(mass)
+        diaginertia = np.array(
+            [
+                0.2 * stone_mass * (a * a + c * c),
+                0.2 * stone_mass * (a * a + c * c),
+                0.4 * stone_mass * (a * a),
+            ],
+            dtype=np.float64,
+        )
+
+        root = ET.Element("mujoco", model=name)
+        worldbody = ET.SubElement(root, "worldbody")
+        outer_body = ET.SubElement(worldbody, "body")
+        body = ET.SubElement(outer_body, "body", name="object")
+        ET.SubElement(
+            body,
+            "inertial",
+            pos="0 0 0",
+            mass=self._arr_to_str([stone_mass]),
+            diaginertia=self._arr_to_str(diaginertia),
+        )
+        ET.SubElement(
+            body,
+            "geom",
+            name="stone_visual",
+            type="cylinder",
+            pos="0 0 0",
+            size=self._arr_to_str([visual_radius, visual_half_height]),
+            group="1",
+            contype="0",
+            conaffinity="0",
+            rgba=self._arr_to_str(rgba),
+        )
+        ET.SubElement(
+            body,
+            "geom",
+            name="stone_collision",
+            type="ellipsoid",
+            pos="0 0 0",
+            size=self._arr_to_str([collision_radius, collision_radius, collision_half_height]),
+            group="0",
+            rgba="0 0 0 0",
+        )
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".xml", delete=False) as tmp:
+            tmp.write(ET.tostring(root, encoding="unicode"))
+            xml_path = tmp.name
+
+        try:
+            super().__init__(
+                fname=xml_path,
+                name=name,
+                joints=[dict(type="free")],
+                obj_type="all",
+                duplicate_collision_geoms=False,
+            )
+        finally:
+            try:
+                os.unlink(xml_path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _arr_to_str(values) -> str:
+        vals = np.asarray(values, dtype=np.float64).reshape(-1)
+        return " ".join(f"{float(v):.8g}" for v in vals)
+
+
 class _Go5x5RigidRobosuite(ManipulationEnv):
     """Minimal robosuite task: table + board visual + rigid stone cylinders."""
 
@@ -125,10 +210,13 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         self.stone_radius = 0.013
         self.stone_height = 0.006
         self.stone_half_height = self.stone_height * 0.5
+        self.collision_stone_radius = self.stone_radius * 0.94
+        self.collision_stone_half_height = self.stone_half_height
+        self.stone_mass = 4000.0 * np.pi * (self.stone_radius ** 2) * self.stone_height
         self._table_stone_clearance = 0.0005
         self._board_stone_clearance = 0.005
 
-        self._stone_objects: List[CylinderObject] = []
+        self._stone_objects: List[_GoStoneObject] = []
         self._stone_joint_names: List[str] = []
         self._stone_body_ids: List[int] = []
         self._board_rotation_rad = 0.0
@@ -188,25 +276,32 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
 
     @property
     def board_intersections_xyz(self) -> np.ndarray:
-        """Board intersection world positions computed from board center, spacing, and rotation.
+        """Board intersection world positions derived from the collision geom world pose.
 
-        Uses ``board_center_xy`` and ``_board_rotation_rad`` (updated each
-        reset by ``_randomize_board_position``) so the grid automatically
-        reflects XY shift and Z-rotation.
+        Reads ``geom_xpos`` for the board collision surface so the grid
+        automatically reflects XY shift, Z-rotation, and the table-body
+        world transform.
         """
         grid = np.zeros((self.board_size, self.board_size, 3), dtype=np.float32)
-        z = self.board_surface_z + self.stone_half_height
+        z = self.board_surface_z + self.collision_stone_half_height
         half = 0.5 * (self.board_size - 1) * self.board_spacing
-        cx, cy = float(self.board_center_xy[0]), float(self.board_center_xy[1])
-        rot = getattr(self, "_board_rotation_rad", 0.0)
-        cos_r = np.cos(rot)
-        sin_r = np.sin(rot)
+        # Use geom world position and orientation as the single source of truth
+        if hasattr(self, "sim"):
+            coll_gid = self.sim.model.geom_name2id("go_board_surface_collision")
+            cx = float(self.sim.data.geom_xpos[coll_gid, 0])
+            cy = float(self.sim.data.geom_xpos[coll_gid, 1])
+            # Use the geom's world rotation matrix (already includes board rotation)
+            xmat = self.sim.data.geom_xmat[coll_gid].reshape(3, 3)
+        else:
+            cx, cy = float(self.board_center_xy[0]), float(self.board_center_xy[1])
+            xmat = np.eye(3)
         for row in range(self.board_size):
             for col in range(self.board_size):
                 lx = -half + col * self.board_spacing
                 ly = half - row * self.board_spacing  # row 0 = most-positive-Y
-                grid[row, col, 0] = cx + cos_r * lx - sin_r * ly
-                grid[row, col, 1] = cy + sin_r * lx + cos_r * ly
+                # Transform local grid offset through the geom's world orientation
+                grid[row, col, 0] = cx + xmat[0, 0] * lx + xmat[0, 1] * ly
+                grid[row, col, 1] = cy + xmat[1, 0] * lx + xmat[1, 1] * ly
                 grid[row, col, 2] = z
         return grid
 
@@ -215,7 +310,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         board_half = 0.5 * float(self.board_size - 1) * self.board_spacing
         x = self.board_center_xy[0] - board_half - 0.12
         y = self.board_center_xy[1]
-        z = self.table_top_z + self.stone_half_height + self._table_stone_clearance
+        z = self.table_top_z + self.collision_stone_half_height + self._table_stone_clearance
         return np.array([x, y, z], dtype=np.float32)
 
     @property
@@ -311,21 +406,21 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             "castshadow": "false",
         })
 
-        # Stone density ~0.040kg for a 13mm radius, 6mm tall cylinder.
-        # Contact params (friction, solref, solimp, condim) are set at
-        # runtime in _patch_physics_params to ensure consistent values.
-        stone_density = 4000.0
+        # Stones use an explicit centered inertial model and a separate
+        # collision ellipsoid for smoother board contact.
 
         self._stone_objects = []
         for color, count, rgba in [("white", self._white_count, [0.96, 0.96, 0.96, 1.0]),
                                    ("black", self._black_count, [0.08, 0.08, 0.08, 1.0])]:
             for idx in range(count):
-                obj = CylinderObject(
+                obj = _GoStoneObject(
                     name=f"{color}_stone_{idx}",
-                    size=[self.stone_radius, self.stone_half_height],
+                    visual_radius=self.stone_radius,
+                    visual_half_height=self.stone_half_height,
+                    collision_radius=self.collision_stone_radius,
+                    collision_half_height=self.collision_stone_half_height,
+                    mass=self.stone_mass,
                     rgba=rgba,
-                    density=stone_density,
-                    rng=self.rng,
                 )
                 self._stone_objects.append(obj)
 
@@ -491,7 +586,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         for obj in self._stone_objects:
             body_id = model.body_name2id(obj.root_body)
             for gid in range(model.ngeom):
-                if model.geom_bodyid[gid] == body_id:
+                if (model.geom_bodyid[gid] == body_id) and (model.geom_group[gid] == 1):
                     self._stone_geom_ids.append(gid)
                     self._stone_default_rgba[gid] = model.geom_rgba[gid].copy()
                     mat_name = "stone_mat_white" if "white" in obj.name else "stone_mat_black"
@@ -545,11 +640,15 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         model.opt.integrator = 2  # mjtIntegrator.mjINT_IMPLICIT
 
         # --- Solver options ---
+        model.opt.timestep = 0.0005
+        # Sync cached timestep so robosuite's substep loop
+        # (control_timestep / model_timestep) uses the new value.
+        self.model_timestep = model.opt.timestep
         model.opt.solver = 2  # mjtSolver.mjSOL_NEWTON
-        model.opt.iterations = 300
+        model.opt.iterations = 500
         model.opt.tolerance = 1e-10
-        model.opt.noslip_iterations = 20
-        model.opt.noslip_tolerance = 1e-8
+        model.opt.noslip_iterations = 100
+        model.opt.noslip_tolerance = 1e-9
 
         # --- Stone geom contact parameters ---
         for obj in self._stone_objects:
@@ -559,9 +658,9 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
                 if model.geom_bodyid[geom_id] == body_id:
                     model.geom_condim[geom_id] = 4
                     model.geom_friction[geom_id] = [1.5, 0.05, 0.02]
-                    model.geom_solref[geom_id] = [0.002, 1.0]
-                    model.geom_solimp[geom_id] = [0.998, 0.998, 0.001, 0.5, 2.0]
-                    model.geom_margin[geom_id] = 0.0002
+                    model.geom_solref[geom_id] = [0.0017, 1.0]
+                    model.geom_solimp[geom_id] = [0.9944, 0.9968, 0.001, 0.5, 2.0]
+                    model.geom_margin[geom_id] = 0.00061
                     model.geom_gap[geom_id] = 0.0
 
         # --- Board collision surface ---
@@ -569,8 +668,8 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             board_geom_id = model.geom_name2id("go_board_surface_collision")
             model.geom_condim[board_geom_id] = 4
             model.geom_friction[board_geom_id] = [1.5, 0.05, 0.02]
-            model.geom_solref[board_geom_id] = [0.002, 1.0]
-            model.geom_solimp[board_geom_id] = [0.998, 0.998, 0.001, 0.5, 2.0]
+            model.geom_solref[board_geom_id] = [0.0017, 1.0]
+            model.geom_solimp[board_geom_id] = [0.9944, 0.9968, 0.001, 0.5, 2.0]
         except Exception:
             pass
 
@@ -580,8 +679,8 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
                 gid = model.geom_name2id(name)
                 model.geom_condim[gid] = 4
                 model.geom_friction[gid] = [1.5, 0.05, 0.02]
-                model.geom_solref[gid] = [0.002, 1.0]
-                model.geom_solimp[gid] = [0.998, 0.998, 0.001, 0.5, 2.0]
+                model.geom_solref[gid] = [0.0017, 1.0]
+                model.geom_solimp[gid] = [0.9944, 0.9968, 0.001, 0.5, 2.0]
         except Exception:
             pass
 
@@ -751,7 +850,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         y0 = self.board_center_xy[1] - 0.26
         x = x0 + 0.026 * float(col)
         y = y0 + 0.026 * float(row)
-        z = self.table_top_z + self.stone_half_height + self._table_stone_clearance
+        z = self.table_top_z + self.collision_stone_half_height + self._table_stone_clearance
         return np.array([x, y, z], dtype=np.float32)
 
     def set_stone_pose(self, stone_idx: int, pos: np.ndarray, quat_wxyz: Optional[np.ndarray] = None) -> None:
@@ -1226,7 +1325,7 @@ class GoRobosuiteBenchmarkEnv:
         self._source_xyz = np.array(
             [source_xy[0], source_xy[1],
              self._rs_env.table_top_z
-             + self._rs_env.stone_half_height
+             + self._rs_env.collision_stone_half_height
              + self._rs_env._table_stone_clearance],
             dtype=np.float32,
         )
@@ -1493,8 +1592,8 @@ class GoRobosuiteBenchmarkEnv:
         fovy = sim.model.cam_fovy[cam_id]
         f = (0.5 * height) / np.tan(np.radians(fovy) * 0.5)
 
-        col = f * p_cam[0] / depth + width * 0.5
-        row = f * (-p_cam[1]) / depth + height * 0.5
+        col = f * p_cam[0] / depth + (width - 1) * 0.5
+        row = f * (-p_cam[1]) / depth + (height - 1) * 0.5
 
         col = int(np.clip(round(col), 0, width - 1))
         row = int(np.clip(round(row), 0, height - 1))
