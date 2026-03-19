@@ -156,12 +156,16 @@ def _collect_single_episode(
             side_margin=side_margin,
         )
 
-    # Release height: clear the board surface (2× board_thickness) plus
-    # existing stones and finger clearance (3× stone_height).
-    release_z = env.table_top_z + env.board_thickness * 1.5 + env.stone_height * 3
+    # Release height ("magic height" for this arm): clear the board surface
+    # plus existing stones and finger clearance (3× stone_height).  Tuned
+    # for the Panda gripper — high enough to avoid collisions with placed
+    # stones, low enough that the drop lands reliably on the target
+    # intersection.  Enforced as a hard floor before the gripper opens.
+    min_release_z = env.table_top_z + env.board_thickness * 2 + env.stone_height * 3
+    release_z = min_release_z
     if hover_height_noise > 0.0:
         rng = getattr(env, "_rng", np.random.RandomState())
-        release_z += rng.uniform(-0.01, 0.01)
+        release_z += abs(rng.uniform(0.0, 0.01))
 
     press_xyz = target_xyz.copy()
     press_xyz[2] = release_z
@@ -209,11 +213,16 @@ def _collect_single_episode(
     # (z≈1.02) and must travel ~0.22 m to reach the source stone (z≈0.80),
     # so generous step budgets are needed for the proportional controller to
     # converge through the OSC dynamics.
+    #
+    # A short settle phase (gripper open, holding position) lets the EEF
+    # velocity die out before the gripper closes — without this the gripper
+    # can snap shut while the arm is still oscillating and miss the stone.
     if hasattr(env, "get_source_stone_pose"):
         source_hover_xyz = source_xyz.copy()
         source_hover_xyz[2] = source_xyz[2] + 0.04  # hover 4cm above stone
         source_press_xyz = source_xyz.copy()
         source_press_xyz[2] = source_xyz[2]  # descend to stone height
+        # 1) Approach source hover (gripper open)
         _drive_to_pose(
             env=env,
             env_interface=env_interface,
@@ -228,6 +237,7 @@ def _collect_single_episode(
             stop_on_success=False,
             stop_on_done=True,
         )
+        # 2) Descend to stone height (gripper open)
         _drive_to_pose(
             env=env,
             env_interface=env_interface,
@@ -242,6 +252,22 @@ def _collect_single_episode(
             stop_on_success=False,
             stop_on_done=True,
         )
+        # 3) Settle: hold position with gripper open so arm decelerates
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=source_press_xyz,
+            num_steps=4,
+            gripper=-1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+        # 4) Close gripper (hold position)
         _drive_to_pose(
             env=env,
             env_interface=env_interface,
@@ -256,6 +282,7 @@ def _collect_single_episode(
             stop_on_success=False,
             stop_on_done=True,
         )
+        # 5) Lift to hover (gripper closed)
         _drive_to_pose(
             env=env,
             env_interface=env_interface,
@@ -319,10 +346,30 @@ def _collect_single_episode(
         prev_xyz = cur_xyz.copy()
 
     # Phase 4: open gripper and hold at release height so stone falls clear.
+    # Enforce: if the EEF drifted below release_z during settle, drive back
+    # up before opening the gripper so the stone is never released too low.
+    release_goal = press_xyz.copy()
+    release_goal[2] = max(release_goal[2], min_release_z)
+    cur_eef_z = float(env.get_eef_pose()[2, 3])
+    if cur_eef_z < min_release_z:
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=release_goal,
+            num_steps=6,
+            gripper=1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=False,
+        )
     _drive_to_pose(
         env=env,
         env_interface=env_interface,
-        goal_xyz=press_xyz,
+        goal_xyz=release_goal,
         num_steps=8,
         gripper=0.0,
         controller_divisor=controller_divisor,

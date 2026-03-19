@@ -215,6 +215,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         self.stone_mass = 4000.0 * np.pi * (self.stone_radius ** 2) * self.stone_height
         self._table_stone_clearance = 0.0005
         self._board_stone_clearance = 0.005
+        self._board_margin = 0.035  # margin beyond outermost grid lines
 
         self._stone_objects: List[_GoStoneObject] = []
         self._stone_joint_names: List[str] = []
@@ -339,25 +340,38 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         )
         mujoco_arena.set_origin([0.0, 0.0, 0.0])
 
-        # Oak wood table texture
+        # Table texture pool — one material per texture for domain randomization
+        # (MuJoCo caches textures on GPU so mat_texid swaps don't render;
+        #  instead we swap geom_matid at runtime)
         import xml.etree.ElementTree as ET
         import robosuite as _robosuite_mod
-        tex_path = str(Path(_robosuite_mod.__file__).parent / "models" / "assets" / "textures" / "light-wood.png")
-        oak_tex = ET.SubElement(mujoco_arena.asset, "texture", {
-            "name": "tex-oak-wood",
-            "file": tex_path,
-            "type": "2d",
-        })
-        oak_mat = ET.SubElement(mujoco_arena.asset, "material", {
-            "name": "table_oak",
-            "texture": "tex-oak-wood",
-            "texrepeat": "3 3",
-            "texuniform": "true",
-            "reflectance": "0.02",
-            "shininess": "0.1",
-            "specular": "0.15",
-        })
-        mujoco_arena.table_visual.set("material", "table_oak")
+        _tex_dir = Path(_robosuite_mod.__file__).parent / "models" / "assets" / "textures"
+        self._table_mat_names = []
+        for tex_file in [
+            "light-wood.png", "ceramic.png", "clay.png",
+            "cream-plaster.png", "gray-woodgrain.png",
+            "wood-tiles.png", "wood-varnished-panels.png",
+            "gray-felt.png",
+        ]:
+            stem = Path(tex_file).stem
+            tex_name = f"tex-table-{stem}"
+            mat_name = f"mat-table-{stem}"
+            ET.SubElement(mujoco_arena.asset, "texture", {
+                "name": tex_name,
+                "file": str(_tex_dir / tex_file),
+                "type": "2d",
+            })
+            ET.SubElement(mujoco_arena.asset, "material", {
+                "name": mat_name,
+                "texture": tex_name,
+                "texrepeat": "3 3",
+                "texuniform": "true",
+                "reflectance": "0.02",
+                "shininess": "0.1",
+                "specular": "0.15",
+            })
+            self._table_mat_names.append(mat_name)
+        mujoco_arena.table_visual.set("material", self._table_mat_names[0])
 
         # Stone materials for glossiness variation
         for mat_name, mat_rgba in [("stone_mat_white", "0.96 0.96 0.96 1"),
@@ -371,7 +385,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             })
 
         # Board grid texture
-        board_half = 0.5 * float(self.board_size - 1) * self.board_spacing + 0.02
+        board_half = 0.5 * float(self.board_size - 1) * self.board_spacing + self._board_margin
         board_tex_img = generate_board_texture(
             board_size=self.board_size,
             board_spacing=self.board_spacing,
@@ -433,7 +447,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
     def _add_board_visuals(self, mujoco_arena: TableArena) -> None:
         table_body = mujoco_arena.table_body
         table_half_h = 0.5 * float(self.table_full_size[2])
-        board_half = 0.5 * float(self.board_size - 1) * self.board_spacing + 0.02
+        board_half = 0.5 * float(self.board_size - 1) * self.board_spacing + self._board_margin
         board_thickness = 0.0025
         board_center_local = np.array(
             [
@@ -532,6 +546,21 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             model._model, _mj.mjtObj.mjOBJ_MATERIAL, "go_board_mat"
         )
         self._default_board_mat_rgba = model.mat_rgba[self._board_mat_id].copy()
+        self._default_board_mat_shininess = float(model.mat_shininess[self._board_mat_id])
+        self._default_board_mat_specular = float(model.mat_specular[self._board_mat_id])
+
+        # Cache table material IDs and geom ID for texture-swap randomization
+        self._table_mat_ids = []
+        self._default_table_mat_rgba = {}
+        self._default_table_mat_shininess = {}
+        self._default_table_mat_specular = {}
+        for mat_name in self._table_mat_names:
+            mid = _mj.mj_name2id(model._model, _mj.mjtObj.mjOBJ_MATERIAL, mat_name)
+            self._table_mat_ids.append(mid)
+            self._default_table_mat_rgba[mid] = model.mat_rgba[mid].copy()
+            self._default_table_mat_shininess[mid] = float(model.mat_shininess[mid])
+            self._default_table_mat_specular[mid] = float(model.mat_specular[mid])
+        self._table_visual_gid = model.geom_name2id("table_visual")
 
         # Clean up the board texture temp file (MuJoCo has already read it)
         import os
@@ -617,6 +646,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         self._randomize_lighting(rng=self.rng)
         self._randomize_camera(rng=self.rng)
         self._randomize_stone_material(rng=self.rng)
+        self._randomize_table_material(rng=self.rng)
         for stone_idx in range(len(self._stone_objects)):
             self.hide_stone(stone_idx)
         self.sim.forward()
@@ -657,19 +687,19 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             for geom_id in range(model.ngeom):
                 if model.geom_bodyid[geom_id] == body_id:
                     model.geom_condim[geom_id] = 4
-                    model.geom_friction[geom_id] = [1.5, 0.05, 0.02]
-                    model.geom_solref[geom_id] = [0.0017, 1.0]
-                    model.geom_solimp[geom_id] = [0.9944, 0.9968, 0.001, 0.5, 2.0]
-                    model.geom_margin[geom_id] = 0.00061
+                    model.geom_friction[geom_id] = [1.5, 0.0698, 0.0785]
+                    model.geom_solref[geom_id] = [0.002, 1.0]
+                    model.geom_solimp[geom_id] = [0.9932, 0.9932, 0.001, 0.5, 2.0]
+                    model.geom_margin[geom_id] = 0.0002
                     model.geom_gap[geom_id] = 0.0
 
         # --- Board collision surface ---
         try:
             board_geom_id = model.geom_name2id("go_board_surface_collision")
             model.geom_condim[board_geom_id] = 4
-            model.geom_friction[board_geom_id] = [1.5, 0.05, 0.02]
-            model.geom_solref[board_geom_id] = [0.0017, 1.0]
-            model.geom_solimp[board_geom_id] = [0.9944, 0.9968, 0.001, 0.5, 2.0]
+            model.geom_friction[board_geom_id] = [1.5, 0.0698, 0.0785]
+            model.geom_solref[board_geom_id] = [0.002, 1.0]
+            model.geom_solimp[board_geom_id] = [0.9932, 0.9932, 0.001, 0.5, 2.0]
         except Exception:
             pass
 
@@ -678,9 +708,9 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             for name in ["table_collision", "table_visual"]:
                 gid = model.geom_name2id(name)
                 model.geom_condim[gid] = 4
-                model.geom_friction[gid] = [1.5, 0.05, 0.02]
-                model.geom_solref[gid] = [0.0017, 1.0]
-                model.geom_solimp[gid] = [0.9944, 0.9968, 0.001, 0.5, 2.0]
+                model.geom_friction[gid] = [1.5, 0.0698, 0.0785]
+                model.geom_solref[gid] = [0.002, 1.0]
+                model.geom_solimp[gid] = [0.9932, 0.9932, 0.001, 0.5, 2.0]
         except Exception:
             pass
 
@@ -689,7 +719,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             jnt_id = model.joint_name2id(jnt_name)
             dof_start = model.jnt_dofadr[jnt_id]
             for i in range(6):
-                model.dof_damping[dof_start + i] = 0.1
+                model.dof_damping[dof_start + i] = 0.369
 
     def _randomize_board_position(self, rng: np.random.RandomState) -> None:
         """Shift the board ±1.5cm XY and optionally perturb surface color (absolute, not incremental)."""
@@ -732,11 +762,17 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             except Exception:
                 pass
 
-        # Perturb board surface color from default ±0.06 RGB (via material rgba)
+        # Perturb board surface color, shininess, and specular
         try:
             color_perturb = rng.uniform(-0.06, 0.06, size=(3,))
             model.mat_rgba[self._board_mat_id, :3] = np.clip(
                 self._default_board_mat_rgba[:3] + color_perturb, 0.0, 1.0
+            )
+            model.mat_shininess[self._board_mat_id] = np.clip(
+                self._default_board_mat_shininess + rng.uniform(-0.15, 0.15), 0.02, 0.6
+            )
+            model.mat_specular[self._board_mat_id] = np.clip(
+                self._default_board_mat_specular + rng.uniform(-0.2, 0.2), 0.05, 0.7
             )
         except Exception:
             pass
@@ -838,6 +874,26 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         for gid, default_rgba in getattr(self, "_stone_default_rgba", {}).items():
             color_noise = rng.uniform(-0.05, 0.05, size=(3,))
             model.geom_rgba[gid, :3] = np.clip(default_rgba[:3] + color_noise, 0.0, 1.0)
+
+    def _randomize_table_material(self, rng: np.random.RandomState) -> None:
+        """Swap table material (texture) and perturb tint, shininess, specular."""
+        model = self.sim.model
+        # Pick a random material from the pool and assign it to the table geom
+        idx = int(rng.integers(len(self._table_mat_ids)))
+        mid = self._table_mat_ids[idx]
+        model.geom_matid[self._table_visual_gid] = mid
+        # Slight color tint ±0.08 RGB
+        color_perturb = rng.uniform(-0.08, 0.08, size=(3,))
+        model.mat_rgba[mid, :3] = np.clip(
+            self._default_table_mat_rgba[mid][:3] + color_perturb, 0.0, 1.0
+        )
+        # Shininess and specular variation
+        model.mat_shininess[mid] = np.clip(
+            self._default_table_mat_shininess[mid] + rng.uniform(-0.15, 0.15), 0.02, 0.5
+        )
+        model.mat_specular[mid] = np.clip(
+            self._default_table_mat_specular[mid] + rng.uniform(-0.2, 0.2), 0.05, 0.6
+        )
 
     def _check_success(self):
         return False
