@@ -1,0 +1,10 @@
+absl-py
+h5py
+imageio
+imageio-ffmpeg
+cmake<4
+dm-control
+dm-env
+numpy
+open_spiel
+tqdm

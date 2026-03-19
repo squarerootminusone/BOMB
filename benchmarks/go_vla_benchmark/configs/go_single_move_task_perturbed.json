@@ -1,0 +1,42 @@
+{
+  "name": "go_single_move_mimicgen_perturbed",
+  "description": "Single-move DeepMind Go task for MimicGen augmentation with spatial warping perturbations",
+  "task_spec": {
+    "subtask_1": {
+      "object_ref": "target_intersection",
+      "subtask_term_signal": "reach_target",
+      "subtask_term_offset_range": [1, 4],
+      "selection_strategy": "nearest_neighbor_object",
+      "selection_strategy_kwargs": {
+        "nn_k": 3
+      },
+      "action_noise": 0.05,
+      "num_interpolation_steps": 8,
+      "num_fixed_steps": 1,
+      "apply_noise_during_interpolation": true
+    },
+    "subtask_2": {
+      "object_ref": "target_intersection",
+      "subtask_term_signal": null,
+      "subtask_term_offset_range": [0, 0],
+      "selection_strategy": "nearest_neighbor_object",
+      "selection_strategy_kwargs": {
+        "nn_k": 3
+      },
+      "action_noise": 0.07,
+      "num_interpolation_steps": 5,
+      "num_fixed_steps": 1,
+      "apply_noise_during_interpolation": true
+    }
+  },
+  "defaults": {
+    "num_demos": 200,
+    "max_attempts": 2000,
+    "select_src_per_subtask": false,
+    "transform_first_robot_pose": true,
+    "interpolate_from_last_target_pose": true,
+    "seed": 0,
+    "opening_moves_min": 0,
+    "opening_moves_max": 10
+  }
+}

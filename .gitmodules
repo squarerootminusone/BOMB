@@ -1,0 +1,3 @@
+[submodule "openvla-oft"]
+	path = openvla-oft
+	url = https://github.com/squarerootminusone/openvla-oft.git

@@ -1,0 +1,721 @@
+"""Source demonstration collection for the Go benchmark."""
+from __future__ import annotations
+import math
+import multiprocessing
+from typing import Any, Dict, List, Tuple
+import numpy as np
+from .common import GoResetOptions
+from .dataset_io import EpisodeRecord, write_dataset
+from .env_factory import create_benchmark_env
+from .mimicgen_interface import MG_GoJacoSingleMove
+
+
+def _stack_obs(obs_seq: List[Dict[str, np.ndarray]]) -> Dict[str, np.ndarray]:
+    """Stack a list of observation dicts into a single dict of arrays."""
+    keys = obs_seq[0].keys()
+    return {k: np.asarray([obs[k] for obs in obs_seq]) for k in keys}
+
+
+def _append_transition(
+    env: Any,
+    env_interface: MG_GoJacoSingleMove,
+    action: np.ndarray,
+    states: List[np.ndarray],
+    observations: List[Dict[str, np.ndarray]],
+    datagen_infos: List[object],
+    actions: List[np.ndarray],
+) -> Tuple[bool, Dict[str, object]]:
+    """Record one env step: snapshot state/obs before stepping, then append to buffers."""
+    state = env.get_state()["states"]
+    obs = env.get_observation()
+    datagen_info = env_interface.get_datagen_info(action=action)
+
+    _, _, done, info = env.step(action)
+
+    states.append(state)
+    observations.append(obs)
+    datagen_infos.append(datagen_info)
+    actions.append(action.astype(np.float32))
+
+    return done, info
+
+
+def _drive_to_pose(
+    env: Any,
+    env_interface: MG_GoJacoSingleMove,
+    goal_xyz: np.ndarray,
+    num_steps: int,
+    gripper: float,
+    controller_divisor: float,
+    states: List[np.ndarray],
+    observations: List[Dict[str, np.ndarray]],
+    datagen_infos: List[object],
+    actions: List[np.ndarray],
+    stop_on_success: bool = True,
+    stop_on_done: bool = True,
+) -> bool:
+    """Drive the end-effector toward goal_xyz using proportional control for up to num_steps."""
+    controller_divisor = max(float(controller_divisor), 1e-6)
+    for _ in range(int(num_steps)):
+        cur_xyz = env.get_eef_pose()[:3, 3]
+        delta = goal_xyz - cur_xyz
+        # Per-step displacement is approximately delta / controller_divisor.
+        action_xyz = np.clip(delta / (env.action_scale * controller_divisor), -1.0, 1.0)
+        action = np.concatenate([action_xyz, np.array([gripper], dtype=np.float32)], axis=0)
+
+        done, _ = _append_transition(
+            env=env,
+            env_interface=env_interface,
+            action=action,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+        )
+        if (stop_on_success and env.is_success()["task"]) or (stop_on_done and done):
+            return True
+    return env.is_success()["task"]
+
+
+def _compute_side_hover_xyz(
+    env: Any,
+    target_xyz: np.ndarray,
+    side_margin: float,
+) -> np.ndarray:
+    """Pick the board-edge waypoint farthest from target_xyz for side-transfer arcs."""
+    board_low_xy, board_high_xy = env.get_board_xy_bounds()
+    board_center = env.get_board_origin_pose()[:3, 3]
+    side_margin = max(0.02, float(side_margin))
+
+    candidate_xy = np.asarray(
+        [
+            [board_low_xy[0] - side_margin, board_center[1]],
+            [board_high_xy[0] + side_margin, board_center[1]],
+            [board_center[0], board_low_xy[1] - side_margin],
+            [board_center[0], board_high_xy[1] + side_margin],
+        ],
+        dtype=np.float32,
+    )
+    dists = np.linalg.norm(candidate_xy - target_xyz[:2].reshape(1, 2), axis=1)
+    side_xy = candidate_xy[int(np.argmax(dists))]
+
+    side_xyz = np.array(
+        [
+            float(side_xy[0]),
+            float(side_xy[1]),
+            max(env.hover_height, env.press_height + 0.09),
+        ],
+        dtype=np.float32,
+    )
+    pad_xy = 0.02
+    low = env.workspace_low.copy()
+    high = env.workspace_high.copy()
+    low[:2] += pad_xy
+    high[:2] -= pad_xy
+    return np.clip(side_xyz, low, high).astype(np.float32)
+
+
+def _collect_single_episode(
+    env: Any,
+    env_interface: MG_GoJacoSingleMove,
+    controller_divisor: float,
+    detour_steps: int,
+    detour_radius: float,
+    approach_steps: int,
+    press_steps: int,
+    retreat_steps: int,
+    side_transfer_steps: int,
+    side_margin: float,
+    recovery_steps: int,
+    hover_height_noise: float = 0.0,
+) -> Tuple[EpisodeRecord, bool]:
+    """Execute one scripted pick-and-place episode, returning the recorded trajectory."""
+    initial_state = env.get_state()
+
+    states: List[np.ndarray] = []
+    observations: List[Dict[str, np.ndarray]] = []
+    datagen_infos: List[object] = []
+    actions: List[np.ndarray] = []
+
+    target_xyz = env.get_target_pose()[:3, 3]
+    source_xyz = (
+        env.get_source_stone_pose()[:3, 3]
+        if hasattr(env, "get_source_stone_pose")
+        else target_xyz.copy()
+    )
+    hover_xyz = target_xyz.copy()
+    hover_xyz[2] = max(env.hover_height * 0.6, env.press_height + 0.05)
+    if hover_height_noise > 0.0:
+        rng = getattr(env, "_rng", np.random.RandomState())
+        noise_factor = 1.0 + rng.uniform(-hover_height_noise * 0.5, hover_height_noise * 0.5)
+        hover_xyz[2] = max(hover_xyz[2] * noise_factor, env.press_height + 0.05)
+    if side_transfer_steps > 0:
+        side_hover_xyz = _compute_side_hover_xyz(
+            env=env,
+            target_xyz=target_xyz,
+            side_margin=side_margin,
+        )
+
+    # Release height ("magic height" for this arm): clear the board surface
+    # plus existing stones and finger clearance (3× stone_height).  Tuned
+    # for the Panda gripper — high enough to avoid collisions with placed
+    # stones, low enough that the drop lands reliably on the target
+    # intersection.  Enforced as a hard floor before the gripper opens.
+    min_release_z = env.table_top_z + env.board_thickness * 2 + env.stone_height * 3
+    release_z = min_release_z
+    if hover_height_noise > 0.0:
+        rng = getattr(env, "_rng", np.random.RandomState())
+        release_z += abs(rng.uniform(0.0, 0.01))
+
+    press_xyz = target_xyz.copy()
+    press_xyz[2] = release_z
+
+    # Optional phase 0: move to a random detour waypoint to create longer / larger motions.
+    if detour_steps > 0 and detour_radius > 0.0:
+        detour_xyz = hover_xyz.copy()
+        detour_xyz[:2] += env.sample_random_action()[:2] * float(detour_radius)
+        detour_xyz = np.clip(detour_xyz, env.workspace_low, env.workspace_high)
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=detour_xyz,
+            num_steps=detour_steps,
+            gripper=-1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+
+    # Optional phase 0b: explicitly move to a side waypoint before approaching
+    # the board target to mimic a pick-then-place transfer arc.
+    if side_transfer_steps > 0:
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=side_hover_xyz,
+            num_steps=side_transfer_steps,
+            gripper=-1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+
+    # Physical-pick phase (robosuite backend): approach source stone and grasp it
+    # before transfer to the board target.  The arm starts at its home pose
+    # (z≈1.02) and must travel ~0.22 m to reach the source stone (z≈0.80),
+    # so generous step budgets are needed for the proportional controller to
+    # converge through the OSC dynamics.
+    #
+    # A short settle phase (gripper open, holding position) lets the EEF
+    # velocity die out before the gripper closes — without this the gripper
+    # can snap shut while the arm is still oscillating and miss the stone.
+    if hasattr(env, "get_source_stone_pose"):
+        source_hover_xyz = source_xyz.copy()
+        source_hover_xyz[2] = source_xyz[2] + 0.04  # hover 4cm above stone
+        source_press_xyz = source_xyz.copy()
+        source_press_xyz[2] = source_xyz[2]  # descend to stone height
+        # 1) Approach source hover (gripper open)
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=source_hover_xyz,
+            num_steps=max(12, approach_steps),
+            gripper=-1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+        # 2) Descend to stone height (gripper open)
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=source_press_xyz,
+            num_steps=max(6, press_steps),
+            gripper=-1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+        # 3) Settle: hold position with gripper open so arm decelerates
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=source_press_xyz,
+            num_steps=4,
+            gripper=-1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+        # 4) Close gripper (hold position)
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=source_press_xyz,
+            num_steps=max(10, press_steps),
+            gripper=1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+        # 5) Lift to hover (gripper closed)
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=source_hover_xyz,
+            num_steps=max(6, retreat_steps),
+            gripper=1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=True,
+        )
+
+    # Phase 1: approach target above the release height.
+    success = _drive_to_pose(
+        env=env,
+        env_interface=env_interface,
+        goal_xyz=hover_xyz,
+        num_steps=max(8, approach_steps),
+        gripper=1.0,
+        controller_divisor=controller_divisor,
+        states=states,
+        observations=observations,
+        datagen_infos=datagen_infos,
+        actions=actions,
+    )
+
+    # Phase 2: descend to release height with gripper closed.
+    if not success:
+        success = _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=press_xyz,
+            num_steps=max(6, press_steps),
+            gripper=1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+        )
+
+    # Phase 3: hold position until arm velocity settles.
+    # Take a step first, *then* measure displacement so prev/cur span a real
+    # simulation tick.
+    settle_threshold = 5e-4  # m/step — at 8 Hz, 5 steps = 0.625s settle
+    prev_xyz = env.get_eef_pose()[:3, 3].copy()
+    for _ in range(5):  # max 5 extra steps (sufficient at 8 Hz)
+        delta = press_xyz - prev_xyz
+        action_xyz = np.clip(delta / (env.action_scale * controller_divisor), -1.0, 1.0)
+        action = np.concatenate([action_xyz, np.array([1.0], dtype=np.float32)])  # gripper closed
+        _append_transition(env=env, env_interface=env_interface, action=action,
+                           states=states, observations=observations,
+                           datagen_infos=datagen_infos, actions=actions)
+        cur_xyz = env.get_eef_pose()[:3, 3]
+        speed = float(np.linalg.norm(cur_xyz - prev_xyz))
+        if speed < settle_threshold:
+            break
+        prev_xyz = cur_xyz.copy()
+
+    # Phase 4: open gripper and hold at release height so stone falls clear.
+    # Enforce: if the EEF drifted below release_z during settle, drive back
+    # up before opening the gripper so the stone is never released too low.
+    release_goal = press_xyz.copy()
+    release_goal[2] = max(release_goal[2], min_release_z)
+    cur_eef_z = float(env.get_eef_pose()[2, 3])
+    if cur_eef_z < min_release_z:
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=release_goal,
+            num_steps=6,
+            gripper=1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=False,
+        )
+    _drive_to_pose(
+        env=env,
+        env_interface=env_interface,
+        goal_xyz=release_goal,
+        num_steps=8,
+        gripper=0.0,
+        controller_divisor=controller_divisor,
+        states=states,
+        observations=observations,
+        datagen_infos=datagen_infos,
+        actions=actions,
+        stop_on_success=False,
+        stop_on_done=False,
+    )
+
+    # Phase 5: retreat to hover.
+    _drive_to_pose(
+        env=env,
+        env_interface=env_interface,
+        goal_xyz=hover_xyz,
+        num_steps=max(6, retreat_steps),
+        gripper=0.0,
+        controller_divisor=controller_divisor,
+        states=states,
+        observations=observations,
+        datagen_infos=datagen_infos,
+        actions=actions,
+        stop_on_success=False,
+        stop_on_done=True,
+    )
+
+    # Optional side transfer: move to side waypoint after committing the move
+    # to produce large board-to-side displacement in recorded trajectories.
+    if side_transfer_steps > 0:
+        _drive_to_pose(
+            env=env,
+            env_interface=env_interface,
+            goal_xyz=side_hover_xyz,
+            num_steps=side_transfer_steps,
+            gripper=-1.0,
+            controller_divisor=controller_divisor,
+            states=states,
+            observations=observations,
+            datagen_infos=datagen_infos,
+            actions=actions,
+            stop_on_success=False,
+            stop_on_done=False,
+        )
+
+    # Recovery: if needed, retry short press sequence with small jitter.
+    if not success:
+        for _ in range(recovery_steps):
+            jitter = env.sample_random_action()[:3] * 0.01
+            retry_xyz = press_xyz + jitter
+            success = _drive_to_pose(
+                env=env,
+                env_interface=env_interface,
+                goal_xyz=retry_xyz,
+                num_steps=3,
+                gripper=1.0,
+                controller_divisor=controller_divisor,
+                states=states,
+                observations=observations,
+                datagen_infos=datagen_infos,
+                actions=actions,
+            )
+            if success:
+                break
+
+    episode = EpisodeRecord(
+        actions=np.asarray(actions, dtype=np.float32),
+        states=np.asarray(states, dtype=np.float32),
+        observations=_stack_obs(observations),
+        datagen_infos=datagen_infos,
+        initial_state=initial_state,
+    )
+    return episode, bool(success)
+
+
+def _collect_worker(config: dict) -> dict:
+    """Worker function for parallel source demo collection (must be top-level for pickle)."""
+    worker_id = config["worker_id"]
+    rng = np.random.RandomState(config["seed"])
+    env = create_benchmark_env(
+        seed=config["seed"],
+        environment_name=config["environment_name"],
+        include_image_obs=config["include_image_obs"],
+        camera_height=config["camera_height"],
+        camera_width=config["camera_width"],
+        gnugo_path=config["gnugo_path"],
+        action_scale=config["action_scale"],
+        success_hold_steps=config["success_hold_steps"],
+        drive_physical_arm=config["drive_physical_arm"],
+        enable_opponent_moves=config["enable_opponent_moves"],
+        opening_with_opponent=config["opening_with_opponent"],
+        render_carried_stone=config["render_carried_stone"],
+        render_eef_overlay=config["render_eef_overlay"],
+        eef_overlay_trail=config["eef_overlay_trail"],
+        robot=config["robot"],
+        gripper_types=config["gripper_types"],
+    )
+    env_interface = MG_GoJacoSingleMove(env=env)
+
+    episodes: List[EpisodeRecord] = []
+    attempts = 0
+    max_attempts = config["num_demos"] * config["max_attempts_per_demo"]
+
+    while (len(episodes) < config["num_demos"]) and (attempts < max_attempts):
+        attempts += 1
+        print(
+            f"[collect][worker {worker_id}] attempt {attempts}/{max_attempts} "
+            f"demos={len(episodes)}/{config['num_demos']}",
+            flush=True,
+        )
+
+        stone_color = rng.choice(["black", "white"])
+        opening_moves = int(rng.randint(config["opening_moves_min"], config["opening_moves_max"] + 1))
+        env.reset(options=GoResetOptions(opening_moves=opening_moves, stone_color=stone_color))
+
+        episode, success = _collect_single_episode(
+            env=env,
+            env_interface=env_interface,
+            controller_divisor=config["controller_divisor"],
+            detour_steps=config["detour_steps"],
+            detour_radius=config["detour_radius"],
+            approach_steps=config["approach_steps"],
+            press_steps=config["press_steps"],
+            retreat_steps=config["retreat_steps"],
+            side_transfer_steps=config["side_transfer_steps"],
+            side_margin=config["side_margin"],
+            recovery_steps=config["recovery_steps"],
+            hover_height_noise=config.get("hover_height_noise", 0.0),
+        )
+
+        if success:
+            episode.extras["stone_color"] = stone_color
+            episodes.append(episode)
+            print(
+                f"[collect][worker {worker_id}] success demos={len(episodes)}/{config['num_demos']} "
+                f"steps={int(episode.actions.shape[0])} color={stone_color}",
+                flush=True,
+            )
+        else:
+            print(f"[collect][worker {worker_id}] attempt failed", flush=True)
+
+    return {
+        "episodes": episodes,
+        "attempts": attempts,
+        "env_meta": env.serialize(),
+        "env_interface_name": type(env_interface).__name__,
+        "env_interface_type": type(env_interface).INTERFACE_TYPE,
+    }
+
+
+def collect_source_demonstrations(
+    output_path: str,
+    environment_name: str = "go_7x7",
+    num_demos: int = 50,
+    seed: int = 0,
+    max_attempts_per_demo: int = 5,
+    opening_moves_min: int = 0,
+    opening_moves_max: int = 8,
+    include_image_obs: bool = True,
+    camera_height: int = 256,  # must be 256 for readable preview videos
+    camera_width: int = 256,  # must be 256 for readable preview videos
+    gnugo_path: str | None = None,
+    action_scale: float = 0.03,
+    success_hold_steps: int = 0,
+    controller_divisor: float = 2.0,
+    detour_steps: int = 0,
+    detour_radius: float = 0.0,
+    approach_steps: int = 10,
+    press_steps: int = 6,
+    retreat_steps: int = 6,
+    side_transfer_steps: int = 0,
+    side_margin: float = 0.16,
+    recovery_steps: int = 3,
+    drive_physical_arm: bool = True,
+    enable_opponent_moves: bool = False,
+    opening_with_opponent: bool = True,
+    render_carried_stone: bool = True,
+    render_eef_overlay: bool = True,
+    eef_overlay_trail: int = 10,
+    robot: str = "Panda",
+    gripper_types: str = "default",
+    num_workers: int = 1,
+    hover_height_noise: float = 0.0,
+) -> Dict[str, object]:
+    """Collect source demonstrations for MimicGen using scripted control."""
+    if num_demos <= 0:
+        raise ValueError("num_demos must be > 0")
+
+    if num_workers > 1:
+        per_worker = math.ceil(num_demos / num_workers)
+        worker_configs = []
+        for i in range(num_workers):
+            worker_configs.append({
+                "worker_id": i,
+                "num_demos": per_worker,
+                "max_attempts_per_demo": max_attempts_per_demo,
+                "seed": seed + i,
+                "opening_moves_min": opening_moves_min,
+                "opening_moves_max": opening_moves_max,
+                "environment_name": environment_name,
+                "include_image_obs": include_image_obs,
+                "camera_height": camera_height,
+                "camera_width": camera_width,
+                "gnugo_path": gnugo_path,
+                "action_scale": action_scale,
+                "success_hold_steps": success_hold_steps,
+                "drive_physical_arm": drive_physical_arm,
+                "enable_opponent_moves": enable_opponent_moves,
+                "opening_with_opponent": opening_with_opponent,
+                "render_carried_stone": render_carried_stone,
+                "render_eef_overlay": render_eef_overlay,
+                "eef_overlay_trail": eef_overlay_trail,
+                "robot": robot,
+                "gripper_types": gripper_types,
+                "controller_divisor": controller_divisor,
+                "detour_steps": detour_steps,
+                "detour_radius": detour_radius,
+                "approach_steps": approach_steps,
+                "press_steps": press_steps,
+                "retreat_steps": retreat_steps,
+                "side_transfer_steps": side_transfer_steps,
+                "side_margin": side_margin,
+                "recovery_steps": recovery_steps,
+                "hover_height_noise": hover_height_noise,
+            })
+
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Pool(num_workers) as pool:
+            results = pool.map(_collect_worker, worker_configs)
+
+        episodes: List[EpisodeRecord] = []
+        total_attempts = 0
+        for r in results:
+            episodes.extend(r["episodes"])
+            total_attempts += r["attempts"]
+        episodes = episodes[:num_demos]
+
+        if len(episodes) < num_demos:
+            raise RuntimeError(
+                f"failed to collect requested demos: got {len(episodes)} / {num_demos} "
+                f"after {total_attempts} attempts across {num_workers} workers"
+            )
+
+        env_meta = results[0]["env_meta"]
+        env_interface_name = results[0]["env_interface_name"]
+        env_interface_type = results[0]["env_interface_type"]
+
+        write_dataset(
+            output_path=output_path,
+            episodes=episodes,
+            env_meta=env_meta,
+            env_interface_name=env_interface_name,
+            env_interface_type=env_interface_type,
+        )
+
+        return {
+            "output_path": output_path,
+            "num_demos": len(episodes),
+            "attempts": total_attempts,
+            "success_rate": float(len(episodes) / total_attempts),
+            "env_interface": env_interface_name,
+            "env_interface_type": env_interface_type,
+            "num_workers": num_workers,
+        }
+
+    rng = np.random.RandomState(seed)
+    env = create_benchmark_env(
+        seed=seed,
+        environment_name=environment_name,
+        include_image_obs=include_image_obs,
+        camera_height=camera_height,
+        camera_width=camera_width,
+        gnugo_path=gnugo_path,
+        action_scale=action_scale,
+        success_hold_steps=success_hold_steps,
+        drive_physical_arm=drive_physical_arm,
+        enable_opponent_moves=enable_opponent_moves,
+        opening_with_opponent=opening_with_opponent,
+        render_carried_stone=render_carried_stone,
+        render_eef_overlay=render_eef_overlay,
+        eef_overlay_trail=eef_overlay_trail,
+        robot=robot,
+        gripper_types=gripper_types,
+    )
+    env_interface = MG_GoJacoSingleMove(env=env)
+
+    episodes: List[EpisodeRecord] = []
+    attempts = 0
+    max_attempts = num_demos * max_attempts_per_demo
+
+    while (len(episodes) < num_demos) and (attempts < max_attempts):
+        attempts += 1
+        print(
+            f"[collect] attempt {attempts}/{max_attempts} demos={len(episodes)}/{num_demos}",
+            flush=True,
+        )
+
+        stone_color = rng.choice(["black", "white"])
+        opening_moves = int(rng.randint(opening_moves_min, opening_moves_max + 1))
+        env.reset(options=GoResetOptions(opening_moves=opening_moves, stone_color=stone_color))
+
+        episode, success = _collect_single_episode(
+            env=env,
+            env_interface=env_interface,
+            controller_divisor=controller_divisor,
+            detour_steps=detour_steps,
+            detour_radius=detour_radius,
+            approach_steps=approach_steps,
+            press_steps=press_steps,
+            retreat_steps=retreat_steps,
+            side_transfer_steps=side_transfer_steps,
+            side_margin=side_margin,
+            recovery_steps=recovery_steps,
+            hover_height_noise=hover_height_noise,
+        )
+
+        if success:
+            episode.extras["stone_color"] = stone_color
+            episodes.append(episode)
+            print(
+                f"[collect] success demos={len(episodes)}/{num_demos} "
+                f"steps={int(episode.actions.shape[0])} color={stone_color}",
+                flush=True,
+            )
+        else:
+            print("[collect] attempt failed", flush=True)
+
+    if len(episodes) < num_demos:
+        raise RuntimeError(
+            f"failed to collect requested demos: got {len(episodes)} / {num_demos} "
+            f"after {attempts} attempts"
+        )
+
+    write_dataset(
+        output_path=output_path,
+        episodes=episodes,
+        env_meta=env.serialize(),
+        env_interface_name=type(env_interface).__name__,
+        env_interface_type=type(env_interface).INTERFACE_TYPE,
+    )
+
+    return {
+        "output_path": output_path,
+        "num_demos": len(episodes),
+        "attempts": attempts,
+        "success_rate": float(len(episodes) / attempts),
+        "env_interface": type(env_interface).__name__,
+        "env_interface_type": type(env_interface).INTERFACE_TYPE,
+    }
