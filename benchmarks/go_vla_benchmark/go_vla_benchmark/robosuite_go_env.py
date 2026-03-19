@@ -719,7 +719,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             jnt_id = model.joint_name2id(jnt_name)
             dof_start = model.jnt_dofadr[jnt_id]
             for i in range(6):
-                model.dof_damping[dof_start + i] = 0.369
+                model.dof_damping[dof_start + i] = 0.1
 
     def _randomize_board_position(self, rng: np.random.RandomState) -> None:
         """Shift the board ±1.5cm XY and optionally perturb surface color (absolute, not incremental)."""
