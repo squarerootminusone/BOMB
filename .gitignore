@@ -5,3 +5,12 @@
 
 robosuite-1.5.2
 eval_videos_5k/
+outputs/
+benchmark_output/
+wandb/
+LIBERO/
+.DS_Store
+__pycache__/
+*.pyc
+MUJOCO_LOG.TXT
+rlds_build.log

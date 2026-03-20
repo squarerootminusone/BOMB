@@ -1,0 +1,9 @@
+adapter_path: null          # path to LoRA checkpoint dir
+data_dir: ~/tensorflow_datasets
+output_dir: benchmark_output
+video_fps: 5
+success_threshold: 0.05     # L1 threshold for proxy task success
+wandb:
+  project: openvla
+  entity: null
+  run_name: null
