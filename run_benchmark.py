@@ -94,10 +94,12 @@ def main(cfg: DictConfig):
         config=OmegaConf.to_container(cfg, resolve=True),
     )
 
-    # --- Load dataset ---
+    # --- Load dataset (both splits) ---
     print("Loading RLDS episodes...")
-    episodes = load_episodes(data_dir=os.path.expanduser(cfg.data_dir))
-    print(f"Loaded {len(episodes)} episodes.")
+    episodes = load_episodes(data_dir=os.path.expanduser(cfg.data_dir), split="all")
+    print(f"Loaded {len(episodes)} episodes "
+          f"(train={sum(1 for e in episodes if e['split']=='train')}, "
+          f"val={sum(1 for e in episodes if e['split']=='val')})")
 
     # --- Load model ---
     runner = ModelRunner()
@@ -116,14 +118,16 @@ def main(cfg: DictConfig):
     # --- Per-episode evaluation ---
     axis_names = ["x", "y", "z", "gripper"]
     all_metrics = []
-    num_success = 0
+    all_splits = []
 
     for i, ep in enumerate(episodes):
         images = ep["images"]
         gt_actions = ep["actions"][:, :4]  # (T, 4)
         instruction = ep["instruction"]
+        split = ep["split"]
+        all_splits.append(split)
 
-        print(f"Episode {i}/{len(episodes)-1}: {instruction}")
+        print(f"Episode {i}/{len(episodes)-1} [{split}]: {instruction}")
 
         # Run inference
         def _progress(done, total):
@@ -147,7 +151,6 @@ def main(cfg: DictConfig):
         # Task success (proxy)
         success = check_task_success(gt_actions, pred_actions, l1_threshold=cfg.success_threshold)
         metrics["success"] = int(success)
-        num_success += int(success)
 
         all_metrics.append(metrics)
 
@@ -157,7 +160,7 @@ def main(cfg: DictConfig):
 
         # Build side-by-side video
         frames = build_sidebyside_frames(images, ep["actions"], pred_actions)
-        video_path = str(video_dir / f"ep_{i}.mp4")
+        video_path = str(video_dir / f"ep_{i}_{split}.mp4")
         writer = imageio.get_writer(video_path, fps=cfg.video_fps,
                                     codec="libx264", pixelformat="yuv420p",
                                     macro_block_size=1)
@@ -167,31 +170,46 @@ def main(cfg: DictConfig):
 
         # Log to wandb
         ep_log = {f"ep_{i}/{k}": v for k, v in metrics.items()}
+        ep_log[f"ep_{i}/split"] = split
         ep_log[f"ep_{i}/video"] = wandb.Video(video_path, format="mp4")
         wandb.log(ep_log)
 
-    # --- Aggregate metrics ---
-    agg = {}
-    for key in all_metrics[0]:
-        vals = [m[key] for m in all_metrics]
-        if key == "success":
-            agg["success_rate"] = float(np.mean(vals))
-            agg["num_success"] = int(np.sum(vals))
-        else:
-            agg[f"mean_{key}"] = float(np.mean(vals))
-            agg[f"std_{key}"] = float(np.std(vals))
+    # --- Aggregate metrics (per-split and overall) ---
+    def _aggregate(metrics_list, label):
+        agg = {}
+        for key in metrics_list[0]:
+            vals = [m[key] for m in metrics_list]
+            if key == "success":
+                agg[f"{label}/success_rate"] = float(np.mean(vals))
+                agg[f"{label}/num_success"] = int(np.sum(vals))
+            else:
+                agg[f"{label}/mean_{key}"] = float(np.mean(vals))
+                agg[f"{label}/std_{key}"] = float(np.std(vals))
+        return agg
+
+    split_names = sorted(set(all_splits))
+    agg_all = _aggregate(all_metrics, "overall")
+
+    for sname in split_names:
+        split_metrics = [m for m, s in zip(all_metrics, all_splits) if s == sname]
+        if split_metrics:
+            agg_all.update(_aggregate(split_metrics, sname))
 
     print(f"\n=== Aggregate metrics ({len(episodes)} episodes) ===")
-    for k, v in agg.items():
-        print(f"  {k}: {v:.4f}")
+    for sname in ["overall"] + split_names:
+        prefix = f"{sname}/"
+        keys = [k for k in sorted(agg_all) if k.startswith(prefix)]
+        print(f"  [{sname}]")
+        for k in keys:
+            print(f"    {k.removeprefix(prefix)}: {agg_all[k]:.4f}")
 
-    wandb.log(agg)
+    wandb.log(agg_all)
 
     # --- Summary table ---
-    columns = ["episode", "instruction"] + list(all_metrics[0].keys())
+    columns = ["episode", "split", "instruction"] + list(all_metrics[0].keys())
     table = wandb.Table(columns=columns)
     for i, ep in enumerate(episodes):
-        row = [i, ep["instruction"]] + [all_metrics[i][k] for k in all_metrics[0]]
+        row = [i, all_splits[i], ep["instruction"]] + [all_metrics[i][k] for k in all_metrics[0]]
         table.add_data(*row)
     wandb.log({"summary_table": table})
 

@@ -111,11 +111,12 @@ def _deduplicate_indices(
 class Builder(tfds.core.GeneratorBasedBuilder):
     """TFDS builder for Go VLA demonstrations."""
 
-    VERSION = tfds.core.Version("3.0.0")
+    VERSION = tfds.core.Version("4.0.0")
     RELEASE_NOTES = {
         "1.0.0": "Initial release.",
         "2.0.0": "4-DOF actions [dx,dy,dz,gripper] instead of zero-padded 7-DOF.",
         "3.0.0": "8 Hz control, board/lighting randomization, near-duplicate frame removal.",
+        "4.0.0": "Explicit train/val splits (last 2 demos held out for validation).",
     }
 
     def _info(self) -> tfds.core.DatasetInfo:
@@ -171,18 +172,28 @@ class Builder(tfds.core.GeneratorBasedBuilder):
             homepage="https://github.com/anthropics/dsait4125",
         )
 
+    _NUM_VAL = 2  # number of held-out demos (taken from the end)
+
     def _split_generators(self, dl_manager):
         hdf5_path = os.environ.get("GO_VLA_HDF5_PATH", _DEFAULT_HDF5_PATH)
-        return {
-            "train": self._generate_examples(hdf5_path),
-        }
-
-    def _generate_examples(self, hdf5_path: str):
-        """Yield (key, episode_dict) for each demo in the HDF5 file."""
         with h5py.File(hdf5_path, "r") as f:
-            demo_keys = sorted(
+            all_keys = sorted(
                 f["data"].keys(), key=lambda k: int(k.split("_")[1])
             )
+        train_keys = all_keys[: -self._NUM_VAL]
+        val_keys = all_keys[-self._NUM_VAL :]
+        return {
+            "train": self._generate_examples(hdf5_path, demo_keys=train_keys),
+            "val": self._generate_examples(hdf5_path, demo_keys=val_keys),
+        }
+
+    def _generate_examples(self, hdf5_path: str, demo_keys: list[str] | None = None):
+        """Yield (key, episode_dict) for each demo in the HDF5 file."""
+        with h5py.File(hdf5_path, "r") as f:
+            if demo_keys is None:
+                demo_keys = sorted(
+                    f["data"].keys(), key=lambda k: int(k.split("_")[1])
+                )
             for demo_idx, demo_key in enumerate(demo_keys):
                 ep = f[f"data/{demo_key}"]
                 actions_4 = np.asarray(ep["actions"], dtype=np.float32)

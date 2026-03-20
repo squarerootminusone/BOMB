@@ -33,22 +33,34 @@ _UNNORM_KEY = "go_vla_dataset"
 # Dataset loading
 # ---------------------------------------------------------------------------
 
-def load_episodes(data_dir=os.path.expanduser("~/tensorflow_datasets")):
+def load_episodes(data_dir=os.path.expanduser("~/tensorflow_datasets"), split="train"):
+    """Load episodes from the RLDS dataset.
+
+    Args:
+        data_dir: TFDS data directory.
+        split: TFDS split name ("train", "val", or "all" for both).
+    """
     builder = Builder(data_dir=data_dir)
-    ds = builder.as_dataset(split="train")
+    if split == "all":
+        splits_to_load = ["train", "val"] if "val" in builder.info.splits else ["train"]
+    else:
+        splits_to_load = [split]
     episodes = []
-    for ep in ds:
-        images, actions, instruction = [], [], None
-        for step in ep["steps"]:
-            images.append(step["observation"]["image"].numpy())
-            actions.append(step["action"].numpy())
-            if instruction is None:
-                instruction = step["language_instruction"].numpy().decode("utf-8")
-        episodes.append({
-            "images": np.stack(images),
-            "actions": np.stack(actions),
-            "instruction": instruction or "",
-        })
+    for s in splits_to_load:
+        ds = builder.as_dataset(split=s)
+        for ep in ds:
+            images, actions, instruction = [], [], None
+            for step in ep["steps"]:
+                images.append(step["observation"]["image"].numpy())
+                actions.append(step["action"].numpy())
+                if instruction is None:
+                    instruction = step["language_instruction"].numpy().decode("utf-8")
+            episodes.append({
+                "images": np.stack(images),
+                "actions": np.stack(actions),
+                "instruction": instruction or "",
+                "split": s,
+            })
     return episodes
 
 
@@ -264,7 +276,7 @@ def main():
     from qtpy.QtWidgets import QFileDialog
 
     print("Loading RLDS dataset...")
-    episodes = load_episodes()
+    episodes = load_episodes(split="all")
     print(f"Loaded {len(episodes)} episodes.")
 
     if not episodes:
@@ -286,7 +298,7 @@ def main():
         side_by_side[0] = False
         gt_frames = build_gt_frames(ep["images"], ep["actions"])
         img_layer.data = gt_frames
-        viewer.title = f"Ep {idx}/{len(episodes)-1}: {ep['instruction']}"
+        viewer.title = f"Ep {idx}/{len(episodes)-1} [{ep['split']}]: {ep['instruction']}"
 
     def _show_sidebyside(idx, pred_actions):
         """Show side-by-side view for episode idx."""
@@ -295,13 +307,13 @@ def main():
         frames = build_sidebyside_frames(ep["images"], ep["actions"], pred_actions)
         img_layer.data = frames
         adapter_name = Path(runner.adapter_path).parent.name if runner.adapter_path else "?"
-        viewer.title = f"Ep {idx}/{len(episodes)-1} [GT | {adapter_name}]: {ep['instruction']}"
+        viewer.title = f"Ep {idx}/{len(episodes)-1} [{ep['split']} | {adapter_name}]: {ep['instruction']}"
 
     # Initial display
     ep = episodes[0]
     gt_frames = build_gt_frames(ep["images"], ep["actions"])
     img_layer = viewer.add_image(gt_frames, name="frames", rgb=True)
-    viewer.title = f"Ep 0/{len(episodes)-1}: {ep['instruction']}"
+    viewer.title = f"Ep 0/{len(episodes)-1} [{ep['split']}]: {ep['instruction']}"
 
     @viewer.bind_key("n")
     def next_episode(viewer):
