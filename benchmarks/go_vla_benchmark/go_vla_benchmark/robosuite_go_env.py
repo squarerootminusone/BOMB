@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Tuple
 import xml.etree.ElementTree as ET
 
 import numpy as np
+import robosuite.utils.transform_utils as T
 
 try:
     import pyspiel
@@ -176,8 +177,8 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
 
     def __init__(
         self,
-        robots: str = "Panda",
-        controller_configs: Optional[dict] = None,
+        robots="Panda",
+        controller_configs=None,
         gripper_types: str = "default",
         initialization_noise: str | dict | None = "default",
         has_renderer: bool = False,
@@ -197,7 +198,9 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         renderer: str = "mujoco",
         renderer_config: Optional[dict] = None,
         seed: Optional[int] = None,
+        env_configuration: str = "default",
     ):
+        self.env_configuration = env_configuration
         self.board_size = 5
         self.table_full_size = np.array((0.9, 0.9, 0.05), dtype=np.float32)
         self.table_friction = (1.5, 0.05, 0.02)
@@ -227,7 +230,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
 
         super().__init__(
             robots=robots,
-            env_configuration="default",
+            env_configuration=env_configuration,
             controller_configs=controller_configs,
             base_types="default",
             gripper_types=gripper_types,
@@ -330,8 +333,16 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
     def _load_model(self):
         super()._load_model()
 
-        xpos = self.robots[0].robot_model.base_xpos_offset["table"](float(self.table_full_size[0]))
-        self.robots[0].robot_model.set_base_xpos(xpos)
+        if len(self.robots) == 2 and self.env_configuration == "opposed":
+            for robot, rotation in zip(self.robots, (np.pi / 2, -np.pi / 2)):
+                xpos = robot.robot_model.base_xpos_offset["table"](float(self.table_full_size[0]))
+                rot = np.array((0, 0, rotation))
+                xpos = T.euler2mat(rot) @ np.array(xpos)
+                robot.robot_model.set_base_xpos(xpos)
+                robot.robot_model.set_base_ori(rot)
+        else:
+            xpos = self.robots[0].robot_model.base_xpos_offset["table"](float(self.table_full_size[0]))
+            self.robots[0].robot_model.set_base_xpos(xpos)
 
         mujoco_arena = TableArena(
             table_full_size=tuple(self.table_full_size.tolist()),
@@ -978,7 +989,9 @@ class GoRobosuiteBenchmarkEnv:
         eef_overlay_trail: int = 10,
         gnugo_path: Optional[str] = None,
         robot: str = "Panda",
+        robots: Optional[list] = None,
         gripper_types: str = "default",
+        env_configuration: str = "default",
     ):
         del drive_physical_arm
         del render_carried_stone
@@ -987,9 +1000,20 @@ class GoRobosuiteBenchmarkEnv:
         self._rng = np.random.RandomState(self.seed)
         self.environment_name = str(environment_name)
 
-        controller_config = self._make_controller_config(robot=robot)
+        # Determine robot(s) — `robots` list takes precedence over `robot` str
+        if robots is not None:
+            robot_spec = robots
+        else:
+            robot_spec = robot
+
+        # Build controller config(s) for each robot
+        if isinstance(robot_spec, list):
+            controller_config = [self._make_controller_config(robot=r) for r in robot_spec]
+        else:
+            controller_config = self._make_controller_config(robot=robot_spec)
+
         self._rs_env = _Go5x5RigidRobosuite(
-            robots=robot,
+            robots=robot_spec,
             controller_configs=controller_config,
             gripper_types=gripper_types,
             initialization_noise={"magnitude": 0.08, "type": "uniform"},
@@ -1004,6 +1028,7 @@ class GoRobosuiteBenchmarkEnv:
             hard_reset=True,
             renderer="mujoco",
             seed=self.seed,
+            env_configuration=env_configuration,
         )
 
         self.include_image_obs = bool(include_image_obs)
@@ -1034,14 +1059,36 @@ class GoRobosuiteBenchmarkEnv:
         self.place_z_threshold = 0.018
 
         self.workspace_low, self.workspace_high = self._compute_workspace_bounds()
+
+        # Multi-robot support
+        self._num_robots = len(self._rs_env.robots)
+        self._active_robot_idx = 0
+        self._robots_info = []
+        for ridx in range(self._num_robots):
+            self._robot = self._rs_env.robots[ridx]
+            keys = self._resolve_action_keys()
+            xyz_max = self._infer_controller_xyz_max()
+            self._robots_info.append({
+                "arm_key": keys[0], "arm_dim": keys[1],
+                "gripper_key": keys[2], "gripper_dim": keys[3],
+                "controller_xyz_max": xyz_max,
+            })
+        # Set active robot (default: robot 0)
         self._robot = self._rs_env.robots[0]
-        self._arm_key, self._arm_dim, self._gripper_key, self._gripper_dim = self._resolve_action_keys()
-        self._controller_xyz_max = self._infer_controller_xyz_max()
+        info = self._robots_info[0]
+        self._arm_key = info["arm_key"]
+        self._arm_dim = info["arm_dim"]
+        self._gripper_key = info["gripper_key"]
+        self._gripper_dim = info["gripper_dim"]
+        self._controller_xyz_max = info["controller_xyz_max"]
 
         self._target_rc: Tuple[int, int] = (0, 0)
         self._target_pose = np.eye(4, dtype=np.float32)
         self._gripper_action = np.zeros((1,), dtype=np.float32)
         self._eef_trail: List[np.ndarray] = []
+
+        # Self-play support: when set, step() uses this player ID for commits
+        self._self_play_player: Optional[int] = None
 
         self._available_stones: Dict[int, List[int]] = {
             SELF: [],
@@ -1062,6 +1109,18 @@ class GoRobosuiteBenchmarkEnv:
     @staticmethod
     def _make_controller_config(robot: str) -> dict:
         return load_composite_controller_config(robot=robot)
+
+    def _switch_active_robot(self, robot_idx: int) -> None:
+        """Switch which robot is currently controlled by step()."""
+        robot_idx = int(robot_idx) % self._num_robots
+        self._active_robot_idx = robot_idx
+        self._robot = self._rs_env.robots[robot_idx]
+        info = self._robots_info[robot_idx]
+        self._arm_key = info["arm_key"]
+        self._arm_dim = info["arm_dim"]
+        self._gripper_key = info["gripper_key"]
+        self._gripper_dim = info["gripper_dim"]
+        self._controller_xyz_max = info["controller_xyz_max"]
 
     def _resolve_action_keys(self) -> Tuple[str, int, Optional[str], int]:
         action_splits = dict(self._robot._action_split_indexes)
@@ -1268,7 +1327,7 @@ class GoRobosuiteBenchmarkEnv:
         self._rs_env.sim.forward()
 
     def _commit_target_move_fallback(self) -> bool:
-        """Force-commit the selected target move when EEF is correctly pressing target."""
+        """Force-commit the selected target move."""
         if self._active_white_stone_idx is not None:
             row, col = self._target_rc
             self._place_stone_at_intersection(
@@ -1278,6 +1337,12 @@ class GoRobosuiteBenchmarkEnv:
             )
             self._rs_env.sim.forward()
         action_int = int(self._target_rc[0] * self.board_size + self._target_rc[1])
+        if self._self_play_player is not None:
+            return bool(self._apply_single_player_move(
+                player_id=int(self._self_play_player),
+                action_int=action_int,
+                use_active_white_stone=True,
+            ))
         return bool(self._apply_go_action(action_int=action_int))
 
     def seed_random_opening(self, opening_moves: int) -> int:
@@ -1391,6 +1456,62 @@ class GoRobosuiteBenchmarkEnv:
         self._eef_trail = [self.get_eef_pose()[:3, 3].copy()]
         return self.get_observation()
 
+    def continue_game(self, target_row: int, target_col: int, stone_color: str) -> Dict[str, np.ndarray]:
+        """Transition to the next move without full reset (for self-play).
+
+        Preserves board state, lighting, camera, and game logic. Retracts the
+        arm, spawns a new stone at the source position, and sets the new target.
+        """
+        # Open gripper to release stone
+        open_gripper_action = np.array([0.0, 0.0, 0.0, -1.0], dtype=np.float32)
+        for _ in range(15):
+            low_level = self._build_low_level_action(open_gripper_action)
+            self._rs_env.step(low_level)
+
+        # Retract arm upward to clear the board
+        retract_action = np.array([0.0, 0.0, 1.0, -1.0], dtype=np.float32)
+        for _ in range(40):
+            low_level = self._build_low_level_action(retract_action)
+            self._rs_env.step(low_level)
+
+        # Switch active robot (if two-arm)
+        if self._num_robots == 2:
+            self._switch_active_robot(1 - self._active_robot_idx)
+
+        # Set stone color and target
+        self._stone_color = stone_color
+        self.set_target_intersection(row=int(target_row), col=int(target_col))
+
+        # Set self-play player based on current OpenSpiel turn
+        self._self_play_player = int(self._logic._state.current_player())
+
+        # Position source stone near active EEF
+        eef_xyz = self.get_eef_pose()[:3, 3]
+        stone_offset = self._rng.uniform(-0.015, 0.015, size=(2,))
+        source_xy = eef_xyz[:2] + stone_offset
+        source_xy = np.clip(source_xy, self.workspace_low[:2], self.workspace_high[:2])
+        self._source_xyz = np.array(
+            [source_xy[0], source_xy[1],
+             self._rs_env.table_top_z
+             + self._rs_env.collision_stone_half_height
+             + self._rs_env._table_stone_clearance],
+            dtype=np.float32,
+        )
+
+        # Spawn new stone and settle
+        self._active_white_stone_idx = None
+        self._spawn_active_stone()
+        self._settle_stones(num_steps=100)
+
+        # Reset per-turn state
+        self._step_count = 0
+        self._move_committed = False
+        self._success_step = None
+        self._committed_stone_idx = None
+        self._eef_trail = [self.get_eef_pose()[:3, 3].copy()]
+
+        return self.get_observation()
+
     def queue_reset_options(self, options: GoResetOptions) -> None:
         self._queued_reset_options = GoResetOptions(
             opening_moves=int(options.opening_moves),
@@ -1437,7 +1558,16 @@ class GoRobosuiteBenchmarkEnv:
         if (self._gripper_key is not None) and (self._gripper_dim > 0):
             gripper_value = float(np.clip((2.0 * float(self._gripper_action[0])) - 1.0, -1.0, 1.0))
             action_dict[self._gripper_key] = np.full((self._gripper_dim,), gripper_value, dtype=np.float32)
-        return self._robot.create_action_vector(action_dict)
+        active_action = self._robot.create_action_vector(action_dict)
+
+        if self._num_robots == 2:
+            other_idx = 1 - self._active_robot_idx
+            inactive_action = np.zeros(self._rs_env.robots[other_idx].action_dim, dtype=np.float32)
+            if self._active_robot_idx == 0:
+                return np.concatenate([active_action, inactive_action])
+            else:
+                return np.concatenate([inactive_action, active_action])
+        return active_action
 
     def reached_target(self) -> bool:
         eef_xy = self.get_eef_pose()[:2, 3]
@@ -1564,11 +1694,24 @@ class GoRobosuiteBenchmarkEnv:
                 and near_target
             ):
                 action_int = row * self.board_size + col
-                committed_stone = int(self._stone_assignments.get(
-                    (SELF, int(row), int(col)),
-                    self._active_white_stone_idx if self._active_white_stone_idx is not None else -1,
-                ))
-                self._move_committed = self._apply_go_action(action_int=int(action_int))
+                if self._self_play_player is not None:
+                    # Self-play mode: commit as the designated player, no auto-opponent
+                    player_id = self._self_play_player
+                    committed_stone = int(self._stone_assignments.get(
+                        (int(player_id), int(row), int(col)),
+                        self._active_white_stone_idx if self._active_white_stone_idx is not None else -1,
+                    ))
+                    self._move_committed = self._apply_single_player_move(
+                        player_id=int(player_id),
+                        action_int=int(action_int),
+                        use_active_white_stone=True,
+                    )
+                else:
+                    committed_stone = int(self._stone_assignments.get(
+                        (SELF, int(row), int(col)),
+                        self._active_white_stone_idx if self._active_white_stone_idx is not None else -1,
+                    ))
+                    self._move_committed = self._apply_go_action(action_int=int(action_int))
                 if self._move_committed and (self._success_step is None):
                     self._success_step = int(self._step_count)
                     self._committed_stone_idx = committed_stone
