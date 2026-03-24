@@ -1,5 +1,5 @@
 dm-control
 dm-env
 open_spiel
-numpy
+numpy<2
 absl-py

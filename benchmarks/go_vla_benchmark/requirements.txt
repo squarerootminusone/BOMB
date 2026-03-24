@@ -5,6 +5,6 @@ imageio-ffmpeg
 cmake<4
 dm-control
 dm-env
-numpy
+numpy<2
 open_spiel
 tqdm

@@ -3,12 +3,33 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import h5py
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
+
+try:
+    from go_vla_benchmark.rlds_preprocessing import (
+        RLDS_NOOP_THRESHOLD,
+        RLDS_SUBSAMPLE_STRIDE,
+        build_instruction,
+        compute_rlds_keep_indices,
+        extract_action_4d,
+        remap_gripper_to_openvla,
+    )
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from go_vla_benchmark.rlds_preprocessing import (
+        RLDS_NOOP_THRESHOLD,
+        RLDS_SUBSAMPLE_STRIDE,
+        build_instruction,
+        compute_rlds_keep_indices,
+        extract_action_4d,
+        remap_gripper_to_openvla,
+    )
 
 _DESCRIPTION = """\
 Go VLA benchmark demonstrations for fine-tuning vision-language-action models.
@@ -22,56 +43,7 @@ _DEFAULT_HDF5_PATH = str(
     Path(__file__).resolve().parents[2] / "data" / "source_go.hdf5"
 )
 
-_INSTRUCTION_TEMPLATES = [
-    "Place a {color} stone on the Go board at row {r}, column {c}.",
-    "Put a {color} stone at position ({r}, {c}) on the Go board.",
-    "Move the {color} stone to row {r}, column {c} on the board.",
-    "Set a {color} stone at ({r}, {c}).",
-]
-
 _USE_EMBED_DIM = 512
-
-# Downsample from 20 Hz to ~5 Hz (keep every 4th step)
-_SUBSAMPLE_STRIDE = 4
-
-# No-op filter: drop steps where the action norm (xyz) is below this threshold
-_NOOP_THRESHOLD = 1e-4
-
-
-def _derive_target_from_board_state(board_state: np.ndarray) -> tuple[int, int]:
-    """Derive the target (row, col) from the board_state difference.
-
-    board_state has shape (T, 5, 5, 4). Channel 1 encodes black stones,
-    channel 2 encodes white stones. We check both to find the newly placed stone.
-    """
-    for ch in [1, 2]:
-        diff = board_state[-1, :, :, ch] - board_state[0, :, :, ch]
-        if diff.max() > 0.5:
-            idx = np.argmax(diff)
-            row, col = divmod(int(idx), board_state.shape[2])
-            return row, col
-    # Fallback: channel 1
-    ch = 1
-    diff = board_state[-1, :, :, ch] - board_state[0, :, :, ch]
-    idx = np.argmax(diff)
-    row, col = divmod(int(idx), board_state.shape[2])
-    return row, col
-
-
-def _extract_action_4d(actions: np.ndarray) -> np.ndarray:
-    """Extract 4D actions [dx, dy, dz, gripper] from any source format.
-
-    Handles both legacy 4D (T, 4) and 7D (T, 7) HDF5 formats.
-    """
-    if actions.shape[1] >= 7:
-        # 7D format: [dx,dy,dz, dax,day,daz, gripper] -> [dx,dy,dz, gripper]
-        out = np.zeros((actions.shape[0], 4), dtype=np.float32)
-        out[:, :3] = actions[:, :3]
-        out[:, 3] = actions[:, 6]
-        return out
-    # Already 4D: [dx, dy, dz, gripper]
-    return actions[:, :4].astype(np.float32)
-
 
 def _compute_use_embedding(text: str) -> np.ndarray:
     """Compute USE-Large/5 embedding for a string, or return zeros."""
@@ -173,29 +145,22 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                     ep["obs/board_state"], dtype=np.float32
                 )
 
-                actions_4dof = _extract_action_4d(actions_4)
-                # Remap gripper from {0, 1} to {-1, +1} to match LIBERO/OpenVLA convention
-                actions_4dof[:, 3] = 2.0 * actions_4dof[:, 3] - 1.0
-                row, col = _derive_target_from_board_state(board_state)
+                actions_4dof = remap_gripper_to_openvla(extract_action_4d(actions_4))
 
                 stone_color = ep["stone_color"][()].decode() if "stone_color" in ep else "black"
-
-                rng = np.random.RandomState(seed=demo_idx)
-                template = _INSTRUCTION_TEMPLATES[
-                    rng.randint(len(_INSTRUCTION_TEMPLATES))
-                ]
-                instruction = template.format(color=stone_color, r=row, c=col)
+                instruction = build_instruction(
+                    board_state=board_state,
+                    demo_idx=demo_idx,
+                    stone_color=stone_color,
+                )
                 embedding = _compute_use_embedding(instruction)
 
                 # Downsample to ~5 Hz and filter no-op actions
-                keep = []
-                for t in range(0, actions_4dof.shape[0], _SUBSAMPLE_STRIDE):
-                    if np.linalg.norm(actions_4dof[t, :3]) >= _NOOP_THRESHOLD:
-                        keep.append(t)
-                # Always keep last step for terminal signal
-                last_t = actions_4dof.shape[0] - 1
-                if last_t not in keep:
-                    keep.append(last_t)
+                keep = compute_rlds_keep_indices(
+                    actions_4dof,
+                    subsample_stride=RLDS_SUBSAMPLE_STRIDE,
+                    noop_threshold=RLDS_NOOP_THRESHOLD,
+                ).tolist()
 
                 num_steps = len(keep)
                 steps = []

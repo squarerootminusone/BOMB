@@ -42,7 +42,8 @@ MUJOCO_GL=glfw conda run --no-capture-output -n mujogo \
 ```bash
 MUJOCO_GL=glfw conda run --no-capture-output -n mujogo \
   python benchmarks/go_vla_benchmark/scripts/generate_augmented_demos.py \
-    --input benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+    --source benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+    --output benchmarks/go_vla_benchmark/data/augmented_go.hdf5 \
     --camera-size 256 --num-workers 8
 ```
 
@@ -50,10 +51,23 @@ MUJOCO_GL=glfw conda run --no-capture-output -n mujogo \
 
 ```bash
 conda run --no-capture-output -n mujogo \
-  python benchmarks/go_vla_benchmark/scripts/convert_to_rlds.py
+  python benchmarks/go_vla_benchmark/scripts/convert_to_rlds.py \
+    --input benchmarks/go_vla_benchmark/data/augmented_go.hdf5
 ```
 
-The RLDS dataset is saved to `~/tensorflow_datasets/go_vla_dataset/`.
+Collection and MimicGen augmentation still write raw MimicGen-style HDF5. The
+RLDS export stage is where OpenVLA-oriented preprocessing happens: the builder
+reads the HDF5 file, downsamples the raw robosuite trajectories from 20 Hz to
+about 5 Hz, filters near-no-op actions, remaps the gripper to `{-1, +1}`, and
+adds language instructions derived from the board state.
+
+The RLDS dataset is saved to `~/tensorflow_datasets/go_vla_dataset/`. To sanity
+check the exported dataset:
+
+```bash
+conda run --no-capture-output -n mujogo \
+  python benchmarks/go_vla_benchmark/scripts/verify_rlds.py
+```
 
 ## Finetuning
 

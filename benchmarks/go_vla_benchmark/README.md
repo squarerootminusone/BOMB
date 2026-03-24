@@ -84,7 +84,7 @@ python benchmarks/go_vla_benchmark/scripts/run_go_viewer.py --env go_5x5_rigid_b
 python benchmarks/go_vla_benchmark/scripts/collect_source_demos.py \
   --output benchmarks/go_vla_benchmark/data/source_go.hdf5 \
   --environment-name robosuite_go_5x5_rigid_bodies \
-  --num-demos 40 \
+  --num-demos 5 \
   --camera-size 512 \
   --opening-min 0 \
   --opening-max 8 \
@@ -100,6 +100,42 @@ python benchmarks/go_vla_benchmark/scripts/collect_source_demos.py \
   --side-margin 0.18 \
   --no-carried-stone
 ```
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/collect_source_demos.py \
+  --output benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+  --environment-name robosuite_go_5x5_rigid_bodies \
+  --num-demos 5 \
+  --camera-size 512 \
+  --action-scale 0.03 \
+  --controller-divisor 2.5 \
+  --success-hold-steps 40 \
+  --detour-steps 0 \
+  --detour-radius 0.01 \
+  --approach-steps 30 \
+  --press-steps 16 \
+  --retreat-steps 22 \
+  --side-transfer-steps 0 \
+  --side-margin 0.01 \
+  --no-carried-stone
+```
+
+```bash
+conda run --no-capture-output -n main   python benchmarks/go_vla_benchmark/scripts/convert_to_rlds.py   --input /root/dsait4125/benchmarks/go_vla_benchmark/data/source_go.hdf5
+```
+
+```bash
+ python viewer_video.py   --data-dir /root/tensorflow_datasets   --start-episode 0   --num-episodes 5   --output /root/dsait4125/all_episodes.mp4
+```
+
+Other installs
+```bash
+pip install huggingface_hub
+```
+Juicy juicy
+```bash
+```
+
 
 This creates MimicGen-compatible source trajectories with:
 
@@ -118,7 +154,7 @@ For robosuite backend robot swaps, pass `--robot <RobotName>` (for example `--ro
 python benchmarks/go_vla_benchmark/scripts/export_agentview_video.py \
   --dataset benchmarks/go_vla_benchmark/data/source_go.hdf5 \
   --output benchmarks/go_vla_benchmark/data/source_go_preview.mp4 \
-  --num-demos 40 \
+  --num-demos 5 \
   --fps 4 \
   --macro-block-size 1
 ```
@@ -159,6 +195,199 @@ python benchmarks/go_vla_benchmark/scripts/inspect_dataset.py \
   --dataset benchmarks/go_vla_benchmark/data/augmented_go.hdf5
 ```
 
+## 6) Convert Generated HDF5 to RLDS (for OpenVLA)
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/convert_to_rlds.py \
+  --input benchmarks/go_vla_benchmark/data/augmented_go.hdf5
+```
+
+This conversion step does more than repackage files. The benchmark still writes
+raw MimicGen-style HDF5 during collection and augmentation, while the RLDS
+builder applies OpenVLA-oriented preprocessing:
+
+- keeps the raw collection / MimicGen pipeline unchanged
+- downsamples robosuite trajectories from 20 Hz to about 5 Hz
+- filters near-no-op actions
+- exports native 4-DoF actions `[dx, dy, dz, gripper]`
+- remaps gripper values from `{0, 1}` to `{-1, +1}`
+- derives language instructions from the board-state delta
+- preserves the HDF5 image resolution instead of hard-coding `256x256`
+
+The converted dataset is written to `~/tensorflow_datasets/go_vla_dataset/`.
+Verify it with:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/verify_rlds.py
+```
+
+If you want RLDS for a smaller debugging set, you can point `--input` at
+`benchmarks/go_vla_benchmark/data/source_go.hdf5` instead.
+
+## Local Explanation Pipeline
+
+The explainability path is now split into a reusable collector plus downstream
+renderers, so you can swap checkpoints and datasets without changing the
+rendering code.
+
+For the remote GPU workflow with fish shell setup, SSH / rsync upload, LoRA
+merge on the cloud, tmux execution, and result download, see
+[CLOUD_EXPORT.md](/Users/rafael/Repos/DSAIT/4125.%20Computer%20Vision/dsait4125/benchmarks/go_vla_benchmark/CLOUD_EXPORT.md).
+
+Collect local explanations with:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/collect_openvla_local_explanations.py \
+  --dataset benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+  --checkpoint /abs/path/to/openvla-checkpoint \
+  --trace-output benchmarks/go_vla_benchmark/data/local_explanations/source_go_trace.npz \
+  --summary-output benchmarks/go_vla_benchmark/data/local_explanations/source_go_summary.json \
+  --num-demos 10 \
+  --stride 4 \
+  --attention-layers 4 \
+  --attn-implementation eager
+```
+
+Each step in the saved trace now includes:
+
+- image patch attribution for every generated action token plus a mean patch map
+- text token attribution over the instruction tokens for every generated action token
+- target output token probabilities for the generated action-token sequence
+
+Turn that trace into per-step artifacts with:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/export_openvla_local_explanation_report.py \
+  --trace-input benchmarks/go_vla_benchmark/data/local_explanations/source_go_trace.npz \
+  --output-dir benchmarks/go_vla_benchmark/data/local_explanations/report \
+  --token-top-k 8
+```
+
+This report export creates, for each step:
+
+- a patch-attribution panel with the mean map plus one heatmap per generated action token
+- a Markdown + JSON summary of target output token ids and probabilities
+- ranked instruction-token saliency tables, both mean and per output token
+
+You can run this in two ways:
+
+- separate: collect the reusable trace first, then render videos later from `--trace-input`
+- chained: run the exporter directly from `--checkpoint` and save the same trace with `--trace-output`
+
+The trace format is designed to grow into later explainability stages:
+
+- intervention tests can reuse the same dataset clips and saved prompts
+- activation patching can reuse the same model adapter boundary
+- global semantic analysis can consume the same saved trace metadata
+
+## Intervention Tests
+
+Stage 2 runs counterfactual perturbations on the same RLDS-aligned clips and
+stores them in a separate reusable trace. The collection script supports running
+all interventions together or only a subset via `--runs`.
+
+Collect the full intervention suite:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/collect_openvla_intervention_tests.py \
+  --dataset benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+  --checkpoint /abs/path/to/openvla-checkpoint \
+  --trace-output benchmarks/go_vla_benchmark/data/interventions/source_go_interventions.npz \
+  --summary-output benchmarks/go_vla_benchmark/data/interventions/source_go_interventions.json \
+  --num-demos 10 \
+  --stride 4 \
+  --top-k 8 \
+  --max-counterfactual-edits 4 \
+  --attn-implementation eager
+```
+
+Export the human-readable report:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/export_openvla_intervention_report.py \
+  --trace-input benchmarks/go_vla_benchmark/data/interventions/source_go_interventions.npz \
+  --output-dir benchmarks/go_vla_benchmark/data/interventions/report
+```
+
+Detailed commands and pseudocode for patch occlusion, text masking, and greedy
+minimal counterfactual edits live in
+[INTERVENTION_TESTS.md](/Users/rafael/Repos/DSAIT/4125.%20Computer%20Vision/dsait4125/benchmarks/go_vla_benchmark/INTERVENTION_TESTS.md).
+
+## Internal Causal Localization
+
+Stage 3 performs activation patching on top of the same RLDS-aligned clips. It
+stores layer-level and head-level restoration scores in a separate reusable
+trace, and can optionally patch any discovered cross-attention-style blocks.
+
+Collect causal localization with patch occlusion as the corruption source:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py \
+  --dataset benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+  --checkpoint /abs/path/to/openvla-checkpoint \
+  --trace-output benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.npz \
+  --summary-output benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.json \
+  --num-demos 4 \
+  --stride 4 \
+  --corruption-type patch-occlusion \
+  --attn-implementation eager
+```
+
+Export the human-readable report:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/export_openvla_causal_localization_report.py \
+  --trace-input benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.npz \
+  --output-dir benchmarks/go_vla_benchmark/data/causal/report
+```
+
+Detailed commands and pseudocode for layer, head, and optional cross-attention
+patching live in
+[CAUSAL_LOCALIZATION.md](/Users/rafael/Repos/DSAIT/4125.%20Computer%20Vision/dsait4125/benchmarks/go_vla_benchmark/CAUSAL_LOCALIZATION.md).
+
+## Attention Failure Videos
+
+To export a side-by-side video with the original inference frames on the left and
+an attention-map video on the right, use the same local-explanation trace:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/export_openvla_attention_videos.py \
+  --trace-input benchmarks/go_vla_benchmark/data/local_explanations/source_go_trace.npz \
+  --output-dir benchmarks/go_vla_benchmark/data/attention_failures \
+  --manifest-output benchmarks/go_vla_benchmark/data/attention_failures_manifest.json \
+  --top-k 3
+```
+
+This renders:
+
+- the language instruction in the header
+- the original inference video next to the attention-map video
+- `gt` and `pred` action cards with `x / y / z / gripper`
+- an attention-history strip that shows how the spatial attention shifts over time
+
+If you already have a saved trace file with predictions + attention grids, render
+without rerunning the model:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/export_openvla_attention_videos.py \
+  --trace-input benchmarks/go_vla_benchmark/data/local_explanations/source_go_trace.npz \
+  --output-dir benchmarks/go_vla_benchmark/data/attention_failures
+```
+
+If you want the exporter to collect and render in one step, it still supports the
+direct checkpoint path and now writes the richer reusable trace format:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/export_openvla_attention_videos.py \
+  --dataset benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+  --checkpoint /abs/path/to/openvla-checkpoint \
+  --trace-output benchmarks/go_vla_benchmark/data/local_explanations/source_go_trace.npz \
+  --output-dir benchmarks/go_vla_benchmark/data/attention_failures \
+  --top-k 3 \
+  --stride 4 \
+  --attn-implementation eager
+```
+
 ## Diversity Controls
 
 Use these controls to create broader scenarios (different board states / moves):
@@ -169,4 +398,7 @@ Use these controls to create broader scenarios (different board states / moves):
 
 ## OpenVLA Next Step
 
-OpenVLA fine-tuning expects RLDS. This benchmark outputs MimicGen-style HDF5 first, so the next stage is an HDF5 -> RLDS conversion pass with task instructions and camera/image selection policy.
+OpenVLA fine-tuning expects RLDS. The collection and MimicGen generation steps
+above should still be followed as before; the additional step is the HDF5 ->
+RLDS conversion pass, which now also performs the action / timing / language
+preprocessing listed in Step 6.
