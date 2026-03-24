@@ -36,7 +36,7 @@ def _print_runtime_diagnostics(args: argparse.Namespace, clips, model_adapter) -
     print(
         json.dumps(
             {
-                "event": "causal_localization_start",
+                "event": "intervention_localization_start",
                 "requested_device": args.device,
                 "resolved_device": str(model_adapter.device),
                 "model_parameter_device": first_param_device,
@@ -46,8 +46,7 @@ def _print_runtime_diagnostics(args: argparse.Namespace, clips, model_adapter) -
                 "torch_cuda_device_count": int(torch.cuda.device_count()),
                 "num_demos": int(len(clips)),
                 "num_frames": int(total_frames),
-                "corruption_type": args.corruption_type,
-                "per_cross_attention": bool(args.per_cross_attention),
+                "type": args.runs,
                 "load_in_8bit": bool(args.load_in_8bit),
                 "load_in_4bit": bool(args.load_in_4bit),
             },
