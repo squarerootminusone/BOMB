@@ -24,6 +24,38 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     save_intervention_trace_file,
 )
 
+def _print_runtime_diagnostics(args: argparse.Namespace, clips, model_adapter) -> None:
+    import torch
+
+    try:
+        first_param_device = str(next(model_adapter.model.parameters()).device)
+    except StopIteration:
+        first_param_device = "<no-parameters>"
+
+    total_frames = sum(int(len(clip.images)) for clip in clips)
+    print(
+        json.dumps(
+            {
+                "event": "causal_localization_start",
+                "requested_device": args.device,
+                "resolved_device": str(model_adapter.device),
+                "model_parameter_device": first_param_device,
+                "dtype": str(model_adapter.dtype),
+                "torch_cuda_available": bool(torch.cuda.is_available()),
+                "torch_cuda_version": torch.version.cuda,
+                "torch_cuda_device_count": int(torch.cuda.device_count()),
+                "num_demos": int(len(clips)),
+                "num_frames": int(total_frames),
+                "corruption_type": args.corruption_type,
+                "per_cross_attention": bool(args.per_cross_attention),
+                "load_in_8bit": bool(args.load_in_8bit),
+                "load_in_4bit": bool(args.load_in_4bit),
+            },
+            indent=2,
+        ),
+        file=sys.stderr,
+        flush=True,
+    )
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -102,6 +134,9 @@ def main() -> None:
         load_in_8bit=args.load_in_8bit,
         load_in_4bit=args.load_in_4bit,
     )
+
+    _print_runtime_diagnostics(args=args, clips=clips, model_adapter=model_adapter)
+
     traces = collect_episode_intervention_traces(
         clips=clips,
         model_adapter=model_adapter,

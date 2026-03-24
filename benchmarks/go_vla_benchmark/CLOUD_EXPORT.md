@@ -37,9 +37,9 @@ for `--checkpoint`, so the cloud flow is:
 Run these from fish on your laptop:
 
 ```fish
-set -x HOST 89.221.67.148
+set -x HOST 83.233.228.250
 set -x CLOUD root@$HOST
-set -x PORT 29311
+set -x PORT 28847
 set -x KEY ~/.ssh/id_ed25519_cloud_instances
 set -x ADDRESS 8080:localhost:8080
 
@@ -59,6 +59,8 @@ set -x LOCAL_DATASET "$LOCAL_REPO/benchmarks/go_vla_benchmark/data/source_go.hdf
 set -x CLOUD_DATASET "$REMOTE_REPO/benchmarks/go_vla_benchmark/data/source_go.hdf5"
 set -x CLOUD_VIDEO "$REMOTE_REPO/benchmarks/go_vla_benchmark/data/source_go_preview.mp4"
 set -x CLOUD_VIDEO_RLDS "$REMOTE_REPO/all_episodes.mp4"
+set -x CLOUD_ALL_DATA "$REMOTE_REPO/benchmarks/go_vla_benchmark/data"
+
 set -x LOCAL_EXPORT_DIR "$LOCAL_RUN_DIR/cloud_export"
 ```
 
@@ -73,6 +75,14 @@ rsync -avP -e "ssh -i $KEY -p $PORT" \
 rsync -avP -e "ssh -i $KEY -p $PORT" \
   "$CLOUD:$CLOUD_VIDEO_RLDS" \
   "$LOCAL_REPO/"
+```
+
+```bash
+rsync -avP -e "ssh -i $KEY -p $PORT" \
+  --exclude='/**/.*' \
+  --exclude='.*' \
+  "$CLOUD:$CLOUD_ALL_DATA" \
+  "$LOCAL_REPO/data"
 ```
 
 ```
