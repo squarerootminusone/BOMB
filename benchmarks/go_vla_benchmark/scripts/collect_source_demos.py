@@ -101,6 +101,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--recovery-steps", type=int, default=3)
     parser.add_argument(
+        "--hover-height-noise",
+        type=float,
+        default=0.2,
+        help="fractional noise on hover/approach height (0=none, 0.2=±20%%)",
+    )
+    parser.add_argument("--num-workers", type=int, default=1, help="parallel worker processes")
+    parser.add_argument(
         "--no-physical-arm",
         action="store_true",
         help="disable IK-driven physical Kinova motion and use pseudo EEF only",
@@ -177,6 +184,8 @@ def main() -> None:
         eef_overlay_trail=args.eef_overlay_trail,
         robot=args.robot,
         gripper_types=args.gripper_types,
+        num_workers=args.num_workers,
+        hover_height_noise=args.hover_height_noise,
     )
     print(json.dumps(stats, indent=2))
 

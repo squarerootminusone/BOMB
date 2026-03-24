@@ -3,33 +3,12 @@
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 import h5py
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
-
-try:
-    from go_vla_benchmark.rlds_preprocessing import (
-        RLDS_NOOP_THRESHOLD,
-        RLDS_SUBSAMPLE_STRIDE,
-        build_instruction,
-        compute_rlds_keep_indices,
-        extract_action_4d,
-        remap_gripper_to_openvla,
-    )
-except ModuleNotFoundError:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-    from go_vla_benchmark.rlds_preprocessing import (
-        RLDS_NOOP_THRESHOLD,
-        RLDS_SUBSAMPLE_STRIDE,
-        build_instruction,
-        compute_rlds_keep_indices,
-        extract_action_4d,
-        remap_gripper_to_openvla,
-    )
 
 _DESCRIPTION = """\
 Go VLA benchmark demonstrations for fine-tuning vision-language-action models.
@@ -43,7 +22,50 @@ _DEFAULT_HDF5_PATH = str(
     Path(__file__).resolve().parents[2] / "data" / "source_go.hdf5"
 )
 
+_INSTRUCTION_TEMPLATES = [
+    "Place a {color} stone on the Go board at row {r}, column {c}.",
+    "Put a {color} stone at position ({r}, {c}) on the Go board.",
+    "Move the {color} stone to row {r}, column {c} on the board.",
+    "Set a {color} stone at ({r}, {c}).",
+]
+
 _USE_EMBED_DIM = 512
+
+
+def _derive_target_from_board_state(board_state: np.ndarray) -> tuple[int, int]:
+    """Derive the target (row, col) from the board_state difference.
+
+    board_state has shape (T, 5, 5, 4). Channel 1 encodes black stones,
+    channel 2 encodes white stones. We check both to find the newly placed stone.
+    """
+    for ch in [1, 2]:
+        diff = board_state[-1, :, :, ch] - board_state[0, :, :, ch]
+        if diff.max() > 0.5:
+            idx = np.argmax(diff)
+            row, col = divmod(int(idx), board_state.shape[2])
+            return row, col
+    # Fallback: channel 1
+    ch = 1
+    diff = board_state[-1, :, :, ch] - board_state[0, :, :, ch]
+    idx = np.argmax(diff)
+    row, col = divmod(int(idx), board_state.shape[2])
+    return row, col
+
+
+def _extract_action_4d(actions: np.ndarray) -> np.ndarray:
+    """Extract 4D actions [dx, dy, dz, gripper] from any source format.
+
+    Handles both legacy 4D (T, 4) and 7D (T, 7) HDF5 formats.
+    """
+    if actions.shape[1] >= 7:
+        # 7D format: [dx,dy,dz, dax,day,daz, gripper] -> [dx,dy,dz, gripper]
+        out = np.zeros((actions.shape[0], 4), dtype=np.float32)
+        out[:, :3] = actions[:, :3]
+        out[:, 3] = actions[:, 6]
+        return out
+    # Already 4D: [dx, dy, dz, gripper]
+    return actions[:, :4].astype(np.float32)
+
 
 def _compute_use_embedding(text: str) -> np.ndarray:
     """Compute USE-Large/5 embedding for a string, or return zeros."""
@@ -60,15 +82,40 @@ def _compute_use_embedding(text: str) -> np.ndarray:
         return np.zeros(_USE_EMBED_DIM, dtype=np.float32)
 
 
+def _deduplicate_indices(
+    actions_4d: np.ndarray,
+    eef_pos: np.ndarray,
+    action_norm_thresh: float = 0.02,
+    eef_disp_thresh: float = 0.001,
+) -> np.ndarray:
+    """Return a boolean mask selecting non-redundant frames.
+
+    Always keeps the first and last frame.  A frame is kept if either:
+    - Its action XYZ L2 norm exceeds *action_norm_thresh*, OR
+    - The EEF displacement from the last kept frame exceeds *eef_disp_thresh* (1 mm).
+    """
+    n = actions_4d.shape[0]
+    keep = np.zeros(n, dtype=bool)
+    keep[0] = True
+    keep[-1] = True
+    last_kept_pos = eef_pos[0].copy()
+    for t in range(1, n - 1):
+        action_norm = float(np.linalg.norm(actions_4d[t, :3]))
+        eef_disp = float(np.linalg.norm(eef_pos[t] - last_kept_pos))
+        if action_norm > action_norm_thresh or eef_disp > eef_disp_thresh:
+            keep[t] = True
+            last_kept_pos = eef_pos[t].copy()
+    return keep
+
+
 class Builder(tfds.core.GeneratorBasedBuilder):
     """TFDS builder for Go VLA demonstrations."""
 
     VERSION = tfds.core.Version("3.0.0")
     RELEASE_NOTES = {
-        "1.0.0": "Initial release (7-DoF padded actions, 20 Hz).",
-        "1.1.0": "Downsample to ~5 Hz and filter no-op actions.",
-        "2.0.0": "Native 4-DoF actions (dx,dy,dz,gripper), ~5 Hz, no-op filtered.",
-        "3.0.0": "Gripper {-1,+1}, stone color support, dynamic image resolution, both-color board detection.",
+        "1.0.0": "Initial release.",
+        "2.0.0": "4-DOF actions [dx,dy,dz,gripper] instead of zero-padded 7-DOF.",
+        "3.0.0": "8 Hz control, board/lighting randomization, near-duplicate frame removal.",
     }
 
     def _info(self) -> tfds.core.DatasetInfo:
@@ -145,37 +192,42 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                     ep["obs/board_state"], dtype=np.float32
                 )
 
-                actions_4dof = remap_gripper_to_openvla(extract_action_4d(actions_4))
+                actions_4d = _extract_action_4d(actions_4)
+                # Remap legacy gripper values from {0, 1} to {-1, +1} when needed.
+                gripper = actions_4d[:, 3]
+                if np.all((gripper >= 0.0) & (gripper <= 1.0)):
+                    actions_4d[:, 3] = 2.0 * gripper - 1.0
+                row, col = _derive_target_from_board_state(board_state)
+
+                # Deduplicate near-identical frames (idle/settling segments)
+                keep_mask = _deduplicate_indices(actions_4d, eef_pos)
+                actions_4d = actions_4d[keep_mask]
+                images = images[keep_mask]
+                eef_pos = eef_pos[keep_mask]
 
                 stone_color = ep["stone_color"][()].decode() if "stone_color" in ep else "black"
-                instruction = build_instruction(
-                    board_state=board_state,
-                    demo_idx=demo_idx,
-                    stone_color=stone_color,
-                )
+
+                rng = np.random.RandomState(seed=demo_idx)
+                template = _INSTRUCTION_TEMPLATES[
+                    rng.randint(len(_INSTRUCTION_TEMPLATES))
+                ]
+                instruction = template.format(color=stone_color, r=row, c=col)
                 embedding = _compute_use_embedding(instruction)
 
-                # Downsample to ~5 Hz and filter no-op actions
-                keep = compute_rlds_keep_indices(
-                    actions_4dof,
-                    subsample_stride=RLDS_SUBSAMPLE_STRIDE,
-                    noop_threshold=RLDS_NOOP_THRESHOLD,
-                ).tolist()
-
-                num_steps = len(keep)
+                num_steps = actions_4d.shape[0]
                 steps = []
-                for i, t in enumerate(keep):
-                    is_last = i == num_steps - 1
+                for t in range(num_steps):
+                    is_last = t == num_steps - 1
                     steps.append(
                         {
                             "observation": {
                                 "image": images[t],
                                 "state": eef_pos[t],
                             },
-                            "action": actions_4dof[t],
+                            "action": actions_4d[t],
                             "reward": 1.0 if is_last else 0.0,
                             "discount": 1.0,
-                            "is_first": i == 0,
+                            "is_first": t == 0,
                             "is_last": is_last,
                             "is_terminal": is_last,
                             "language_instruction": instruction,

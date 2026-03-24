@@ -1,3 +1,2 @@
-data/*.hdf5
-data/*.mp4
+data/*
 __pycache__/

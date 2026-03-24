@@ -93,7 +93,10 @@ def write_dataset(
             ep_grp["datagen_info"].attrs["env_interface_type"] = env_interface_type
 
             for extra_key, extra_value in ep.extras.items():
-                ep_grp.create_dataset(extra_key, data=np.asarray(extra_value))
+                if isinstance(extra_value, str):
+                    ep_grp.create_dataset(extra_key, data=extra_value.encode())
+                else:
+                    ep_grp.create_dataset(extra_key, data=np.asarray(extra_value))
 
             if "model" in ep.initial_state and ep.initial_state["model"] is not None:
                 ep_grp.attrs["model_file"] = ep.initial_state["model"]

@@ -107,12 +107,7 @@ def parse_args() -> argparse.Namespace:
         help="number of prior EEF points shown in overlay trail",
     )
     parser.add_argument("--no-image-obs", action="store_true", help="disable image observations")
-    parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=0,
-        help="number of parallel worker processes (0 = serial)",
-    )
+    parser.add_argument("--num-workers", type=int, default=1, help="parallel worker processes")
     return parser.parse_args()
 
 

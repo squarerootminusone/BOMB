@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+import xml.etree.ElementTree as ET
 
 import numpy as np
 
@@ -16,13 +18,16 @@ except Exception as exc:  # pragma: no cover - import diagnostics path
 else:
     _PYSPIEL_IMPORT_ERROR = None
 
+import tempfile
+
 from robosuite.controllers import load_composite_controller_config
 from robosuite.environments.manipulation.manipulation_env import ManipulationEnv
 from robosuite.models.arenas import TableArena
-from robosuite.models.objects import CylinderObject
+from robosuite.models.objects import MujocoXMLObject
 from robosuite.models.tasks import ManipulationTask
 from robosuite.utils.mjcf_utils import new_geom
 
+from .board_texture import generate_board_texture
 from .common import GoResetOptions
 
 SELF = 0
@@ -83,6 +88,89 @@ class _OpenSpielGoLogic:
         return self._moves.copy()
 
 
+class _GoStoneObject(MujocoXMLObject):
+    """Go stone with separate visual and collision geoms plus explicit inertial data."""
+
+    def __init__(
+        self,
+        name: str,
+        visual_radius: float,
+        visual_half_height: float,
+        collision_radius: float,
+        collision_half_height: float,
+        mass: float,
+        rgba: List[float],
+    ):
+        a = float(collision_radius)
+        c = float(collision_half_height)
+        stone_mass = float(mass)
+        diaginertia = np.array(
+            [
+                0.2 * stone_mass * (a * a + c * c),
+                0.2 * stone_mass * (a * a + c * c),
+                0.4 * stone_mass * (a * a),
+            ],
+            dtype=np.float64,
+        )
+
+        root = ET.Element("mujoco", model=name)
+        worldbody = ET.SubElement(root, "worldbody")
+        outer_body = ET.SubElement(worldbody, "body")
+        body = ET.SubElement(outer_body, "body", name="object")
+        ET.SubElement(
+            body,
+            "inertial",
+            pos="0 0 0",
+            mass=self._arr_to_str([stone_mass]),
+            diaginertia=self._arr_to_str(diaginertia),
+        )
+        ET.SubElement(
+            body,
+            "geom",
+            name="stone_visual",
+            type="cylinder",
+            pos="0 0 0",
+            size=self._arr_to_str([visual_radius, visual_half_height]),
+            group="1",
+            contype="0",
+            conaffinity="0",
+            rgba=self._arr_to_str(rgba),
+        )
+        ET.SubElement(
+            body,
+            "geom",
+            name="stone_collision",
+            type="ellipsoid",
+            pos="0 0 0",
+            size=self._arr_to_str([collision_radius, collision_radius, collision_half_height]),
+            group="0",
+            rgba="0 0 0 0",
+        )
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".xml", delete=False) as tmp:
+            tmp.write(ET.tostring(root, encoding="unicode"))
+            xml_path = tmp.name
+
+        try:
+            super().__init__(
+                fname=xml_path,
+                name=name,
+                joints=[dict(type="free")],
+                obj_type="all",
+                duplicate_collision_geoms=False,
+            )
+        finally:
+            try:
+                os.unlink(xml_path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _arr_to_str(values) -> str:
+        vals = np.asarray(values, dtype=np.float64).reshape(-1)
+        return " ".join(f"{float(v):.8g}" for v in vals)
+
+
 class _Go5x5RigidRobosuite(ManipulationEnv):
     """Minimal robosuite task: table + board visual + rigid stone cylinders."""
 
@@ -98,8 +186,8 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         render_collision_mesh: bool = False,
         render_visual_mesh: bool = True,
         render_gpu_device_id: int = -1,
-        control_freq: int = 20,
-        lite_physics: bool = False,
+        control_freq: int = 8,
+        lite_physics: bool = True,
         horizon: int = 400,
         ignore_done: bool = False,
         hard_reset: bool = True,
@@ -117,13 +205,22 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
 
         self.board_spacing = 0.045
         self.board_center_xy = np.array((0.02, 0.0), dtype=np.float32)
+        self._board_center_xy_default = self.board_center_xy.copy()
+        self._board_shift_range = 0.015  # ±1.5cm XY randomization
         self.stone_radius = 0.013
         self.stone_height = 0.006
         self.stone_half_height = self.stone_height * 0.5
+        self.collision_stone_radius = self.stone_radius * 0.94
+        self.collision_stone_half_height = self.stone_half_height
+        self.stone_mass = 4000.0 * np.pi * (self.stone_radius ** 2) * self.stone_height
+        self._table_stone_clearance = 0.0005
+        self._board_stone_clearance = 0.005
+        self._board_margin = 0.035  # margin beyond outermost grid lines
 
-        self._stone_objects: List[CylinderObject] = []
+        self._stone_objects: List[_GoStoneObject] = []
         self._stone_joint_names: List[str] = []
         self._stone_body_ids: List[int] = []
+        self._board_rotation_rad = 0.0
 
         self._white_count = self.board_size * self.board_size
         self._black_count = self.board_size * self.board_size
@@ -159,18 +256,54 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
 
     @property
     def table_top_z(self) -> float:
+        """World z of the table support surface used for off-board stones."""
         return float(self.table_offset[2])
 
     @property
+    def board_surface_z(self) -> float:
+        """World z of the board collision surface top (where stones rest)."""
+        if hasattr(self, "sim"):
+            try:
+                board_geom_id = self.sim.model.geom_name2id("go_board_surface_collision")
+                return float(
+                    self.sim.data.geom_xpos[board_geom_id, 2]
+                    + self.sim.model.geom_size[board_geom_id, 2]
+                )
+            except Exception:
+                pass
+        table_half_h = 0.5 * float(self.table_full_size[2])
+        board_thickness = 0.0025
+        return float(self.table_offset[2]) + table_half_h + 2 * board_thickness
+
+    @property
     def board_intersections_xyz(self) -> np.ndarray:
+        """Board intersection world positions derived from the collision geom world pose.
+
+        Reads ``geom_xpos`` for the board collision surface so the grid
+        automatically reflects XY shift, Z-rotation, and the table-body
+        world transform.
+        """
         grid = np.zeros((self.board_size, self.board_size, 3), dtype=np.float32)
-        half = 0.5 * float(self.board_size - 1)
-        z = self.table_top_z + self.stone_half_height + 0.0005
+        z = self.board_surface_z + self.collision_stone_half_height
+        half = 0.5 * (self.board_size - 1) * self.board_spacing
+        # Use geom world position and orientation as the single source of truth
+        if hasattr(self, "sim"):
+            coll_gid = self.sim.model.geom_name2id("go_board_surface_collision")
+            cx = float(self.sim.data.geom_xpos[coll_gid, 0])
+            cy = float(self.sim.data.geom_xpos[coll_gid, 1])
+            # Use the geom's world rotation matrix (already includes board rotation)
+            xmat = self.sim.data.geom_xmat[coll_gid].reshape(3, 3)
+        else:
+            cx, cy = float(self.board_center_xy[0]), float(self.board_center_xy[1])
+            xmat = np.eye(3)
         for row in range(self.board_size):
             for col in range(self.board_size):
-                x = self.board_center_xy[0] + (float(col) - half) * self.board_spacing
-                y = self.board_center_xy[1] + (half - float(row)) * self.board_spacing
-                grid[row, col] = np.array([x, y, z], dtype=np.float32)
+                lx = -half + col * self.board_spacing
+                ly = half - row * self.board_spacing  # row 0 = most-positive-Y
+                # Transform local grid offset through the geom's world orientation
+                grid[row, col, 0] = cx + xmat[0, 0] * lx + xmat[0, 1] * ly
+                grid[row, col, 1] = cy + xmat[1, 0] * lx + xmat[1, 1] * ly
+                grid[row, col, 2] = z
         return grid
 
     @property
@@ -178,7 +311,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         board_half = 0.5 * float(self.board_size - 1) * self.board_spacing
         x = self.board_center_xy[0] - board_half - 0.12
         y = self.board_center_xy[1]
-        z = self.table_top_z + self.stone_half_height + 0.0005
+        z = self.table_top_z + self.collision_stone_half_height + self._table_stone_clearance
         return np.array([x, y, z], dtype=np.float32)
 
     @property
@@ -207,62 +340,103 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         )
         mujoco_arena.set_origin([0.0, 0.0, 0.0])
 
-        # Oak wood table texture
+        # Table texture pool — one material per texture for domain randomization
+        # (MuJoCo caches textures on GPU so mat_texid swaps don't render;
+        #  instead we swap geom_matid at runtime)
         import xml.etree.ElementTree as ET
         import robosuite as _robosuite_mod
-        tex_path = str(Path(_robosuite_mod.__file__).parent / "models" / "assets" / "textures" / "dark-wood.png")
-        oak_tex = ET.SubElement(mujoco_arena.asset, "texture", {
-            "name": "tex-oak-wood",
-            "file": tex_path,
+        _tex_dir = Path(_robosuite_mod.__file__).parent / "models" / "assets" / "textures"
+        self._table_mat_names = []
+        for tex_file in [
+            "light-wood.png", "ceramic.png", "clay.png",
+            "cream-plaster.png", "gray-woodgrain.png",
+            "wood-tiles.png", "wood-varnished-panels.png",
+            "gray-felt.png",
+        ]:
+            stem = Path(tex_file).stem
+            tex_name = f"tex-table-{stem}"
+            mat_name = f"mat-table-{stem}"
+            ET.SubElement(mujoco_arena.asset, "texture", {
+                "name": tex_name,
+                "file": str(_tex_dir / tex_file),
+                "type": "2d",
+            })
+            ET.SubElement(mujoco_arena.asset, "material", {
+                "name": mat_name,
+                "texture": tex_name,
+                "texrepeat": "3 3",
+                "texuniform": "true",
+                "reflectance": "0.02",
+                "shininess": "0.1",
+                "specular": "0.15",
+            })
+            self._table_mat_names.append(mat_name)
+        mujoco_arena.table_visual.set("material", self._table_mat_names[0])
+
+        # Stone materials for glossiness variation
+        for mat_name, mat_rgba in [("stone_mat_white", "0.96 0.96 0.96 1"),
+                                   ("stone_mat_black", "0.08 0.08 0.08 1")]:
+            ET.SubElement(mujoco_arena.asset, "material", {
+                "name": mat_name,
+                "shininess": "0.3",
+                "specular": "0.5",
+                "reflectance": "0.01",
+                "rgba": mat_rgba,
+            })
+
+        # Board grid texture
+        board_half = 0.5 * float(self.board_size - 1) * self.board_spacing + self._board_margin
+        board_tex_img = generate_board_texture(
+            board_size=self.board_size,
+            board_spacing=self.board_spacing,
+            board_half=board_half,
+        )
+        self._board_tex_tmpfile = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+        board_tex_img.save(self._board_tex_tmpfile.name)
+        ET.SubElement(mujoco_arena.asset, "texture", {
+            "name": "tex-go-board",
+            "file": self._board_tex_tmpfile.name,
             "type": "2d",
         })
-        oak_mat = ET.SubElement(mujoco_arena.asset, "material", {
-            "name": "table_oak",
-            "texture": "tex-oak-wood",
-            "texrepeat": "3 3",
-            "texuniform": "true",
-            "reflectance": "0.02",
-            "shininess": "0.1",
-            "specular": "0.15",
+        ET.SubElement(mujoco_arena.asset, "material", {
+            "name": "go_board_mat",
+            "texture": "tex-go-board",
+            "texrepeat": "1 1",
+            "texuniform": "false",
+            "rgba": "0.74 0.62 0.46 1",
         })
-        mujoco_arena.table_visual.set("material", "table_oak")
 
         self._add_board_visuals(mujoco_arena=mujoco_arena)
 
-        # Stone contact parameters tuned for stable resting on board:
-        # - condim=4 enables torsional friction (prevents spinning/sliding)
-        # - high sliding friction (1.5) matches real stone-on-wood
-        # - solref/solimp give stiff, near-rigid contacts
-        stone_friction = [1.5, 0.05, 0.02]
-        stone_solref = [0.002, 1.0]
-        stone_solimp = [0.998, 0.998, 0.001]
-        stone_density = 5000.0  # ~0.050kg for a 13mm radius, 6mm tall cylinder
+        # Extra perturbation light (invisible by default, activated probabilistically)
+        ET.SubElement(mujoco_arena.worldbody, "light", {
+            "name": "extra_perturbation_light",
+            "pos": "0 0 2.0",
+            "dir": "0 0 -1",
+            "diffuse": "0 0 0",
+            "specular": "0 0 0",
+            "ambient": "0 0 0",
+            "directional": "false",
+            "castshadow": "false",
+        })
+
+        # Stones use an explicit centered inertial model and a separate
+        # collision ellipsoid for smoother board contact.
 
         self._stone_objects = []
-        for idx in range(self._white_count):
-            obj = CylinderObject(
-                name=f"white_stone_{idx}",
-                size=[self.stone_radius, self.stone_half_height],
-                rgba=[0.96, 0.96, 0.96, 1.0],
-                density=stone_density,
-                friction=stone_friction,
-                solref=stone_solref,
-                solimp=stone_solimp,
-                rng=self.rng,
-            )
-            self._stone_objects.append(obj)
-        for idx in range(self._black_count):
-            obj = CylinderObject(
-                name=f"black_stone_{idx}",
-                size=[self.stone_radius, self.stone_half_height],
-                rgba=[0.08, 0.08, 0.08, 1.0],
-                density=stone_density,
-                friction=stone_friction,
-                solref=stone_solref,
-                solimp=stone_solimp,
-                rng=self.rng,
-            )
-            self._stone_objects.append(obj)
+        for color, count, rgba in [("white", self._white_count, [0.96, 0.96, 0.96, 1.0]),
+                                   ("black", self._black_count, [0.08, 0.08, 0.08, 1.0])]:
+            for idx in range(count):
+                obj = _GoStoneObject(
+                    name=f"{color}_stone_{idx}",
+                    visual_radius=self.stone_radius,
+                    visual_half_height=self.stone_half_height,
+                    collision_radius=self.collision_stone_radius,
+                    collision_half_height=self.collision_stone_half_height,
+                    mass=self.stone_mass,
+                    rgba=rgba,
+                )
+                self._stone_objects.append(obj)
 
         self.model = ManipulationTask(
             mujoco_arena=mujoco_arena,
@@ -273,7 +447,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
     def _add_board_visuals(self, mujoco_arena: TableArena) -> None:
         table_body = mujoco_arena.table_body
         table_half_h = 0.5 * float(self.table_full_size[2])
-        board_half = 0.5 * float(self.board_size - 1) * self.board_spacing + 0.02
+        board_half = 0.5 * float(self.board_size - 1) * self.board_spacing + self._board_margin
         board_thickness = 0.0025
         board_center_local = np.array(
             [
@@ -283,20 +457,24 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             ],
             dtype=np.float32,
         )
-        # Visual board surface
-        table_body.append(
-            new_geom(
-                name="go_board_surface_visual",
-                type="box",
-                size=[board_half, board_half, board_thickness],
-                pos=board_center_local,
-                group=1,
-                rgba=[0.74, 0.62, 0.46, 1.0],
-                contype="0",
-                conaffinity="0",
-            )
+        # Visual board surface (textured with grid lines via go_board_mat)
+        # NOTE: explicit rgba is required alongside the material — omitting it
+        # changes the compiled geom_rgba to the MuJoCo default (0.5 0.5 0.5 1)
+        # which, despite contype=0, destabilises the contact solver for nearby
+        # collision geoms.  The material tint overrides rgba for rendering.
+        vis_geom = new_geom(
+            name="go_board_surface_visual",
+            type="box",
+            size=[board_half, board_half, board_thickness],
+            pos=board_center_local,
+            group=1,
+            rgba=[0.74, 0.62, 0.46, 1.0],
+            contype="0",
+            conaffinity="0",
         )
-        # Collision board surface with matching contact params for stable stone resting
+        vis_geom.set("material", "go_board_mat")
+        table_body.append(vis_geom)
+        # Collision board surface (contact params set at runtime in _patch_physics_params)
         table_body.append(
             new_geom(
                 name="go_board_surface_collision",
@@ -305,12 +483,13 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
                 pos=board_center_local,
                 group=2,
                 rgba=[0.74, 0.62, 0.46, 0.0],  # invisible
-                friction=[1.5, 0.05, 0.02],
-                solref=[0.002, 1.0],
-                solimp=[0.998, 0.998, 0.001],
             )
         )
 
+        # Invisible line geoms — the grid lines are now painted on via the
+        # board texture, but these geoms must remain in the model because
+        # MuJoCo's broadphase uses their bounding volumes to stabilise the
+        # contact graph for the overlapping collision surface.
         line_half = 0.0012
         line_h = 0.001
         half = 0.5 * float(self.board_size - 1) * self.board_spacing
@@ -327,8 +506,8 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
                         self.board_center_xy[1],
                         line_z,
                     ],
-                    group=1,
-                    rgba=[0.20, 0.16, 0.10, 1.0],
+                    group=2,
+                    rgba=[0.0, 0.0, 0.0, 0.0],
                     contype="0",
                     conaffinity="0",
                 )
@@ -343,24 +522,131 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
                         self.board_center_xy[1] + delta,
                         line_z,
                     ],
-                    group=1,
-                    rgba=[0.20, 0.16, 0.10, 1.0],
+                    group=2,
+                    rgba=[0.0, 0.0, 0.0, 0.0],
                     contype="0",
                     conaffinity="0",
                 )
             )
+
 
     def _setup_references(self):
         super()._setup_references()
         self._stone_joint_names = [obj.joints[0] for obj in self._stone_objects]
         self._stone_body_ids = [self.sim.model.body_name2id(obj.root_body) for obj in self._stone_objects]
 
-    def _setup_observables(self):
-        return super()._setup_observables()
+        # Cache default geom positions, RGBA, and lighting for absolute randomization
+        model = self.sim.model
+        board_geom_names = ["go_board_surface_visual", "go_board_surface_collision"]
+        for i in range(self.board_size):
+            board_geom_names.append(f"go_line_col_{i}")
+            board_geom_names.append(f"go_line_row_{i}")
+        import mujoco as _mj
+        self._board_mat_id = _mj.mj_name2id(
+            model._model, _mj.mjtObj.mjOBJ_MATERIAL, "go_board_mat"
+        )
+        self._default_board_mat_rgba = model.mat_rgba[self._board_mat_id].copy()
+        self._default_board_mat_shininess = float(model.mat_shininess[self._board_mat_id])
+        self._default_board_mat_specular = float(model.mat_specular[self._board_mat_id])
+
+        # Cache table material IDs and geom ID for texture-swap randomization
+        self._table_mat_ids = []
+        self._default_table_mat_rgba = {}
+        self._default_table_mat_shininess = {}
+        self._default_table_mat_specular = {}
+        for mat_name in self._table_mat_names:
+            mid = _mj.mj_name2id(model._model, _mj.mjtObj.mjOBJ_MATERIAL, mat_name)
+            self._table_mat_ids.append(mid)
+            self._default_table_mat_rgba[mid] = model.mat_rgba[mid].copy()
+            self._default_table_mat_shininess[mid] = float(model.mat_shininess[mid])
+            self._default_table_mat_specular[mid] = float(model.mat_specular[mid])
+        self._table_visual_gid = model.geom_name2id("table_visual")
+
+        # Clean up the board texture temp file (MuJoCo has already read it)
+        import os
+        try:
+            os.unlink(self._board_tex_tmpfile.name)
+        except OSError:
+            pass
+        self._default_geom_pos = {}
+        self._default_geom_rgba = {}
+        self._default_geom_quat = {}
+        for name in board_geom_names:
+            try:
+                gid = model.geom_name2id(name)
+                self._default_geom_pos[name] = model.geom_pos[gid].copy()
+                self._default_geom_rgba[name] = model.geom_rgba[gid].copy()
+                self._default_geom_quat[name] = model.geom_quat[gid].copy()
+            except Exception:
+                pass
+        self._default_light_pos = model.light_pos.copy()
+        self._default_light_dir = model.light_dir.copy()
+        self._default_light_diffuse = model.light_diffuse.copy()
+        self._default_light_ambient = model.light_ambient.copy()
+        self._default_light_specular = model.light_specular.copy()
+        try:
+            self._default_headlight_diffuse = model.vis.headlight.diffuse.copy()
+            self._default_headlight_ambient = model.vis.headlight.ambient.copy()
+        except Exception:
+            self._default_headlight_diffuse = None
+            self._default_headlight_ambient = None
+
+        # Cache camera defaults for FOV and angle perturbation
+        cam_name = self.camera_names[0] if hasattr(self, "camera_names") and self.camera_names else "agentview"
+        try:
+            cam_id = model.camera_name2id(cam_name)
+            self._default_cam_fovy = float(model.cam_fovy[cam_id])
+            self._default_cam_quat = model.cam_quat[cam_id].copy()
+            self._cam_id = cam_id
+        except Exception:
+            self._default_cam_fovy = 45.0
+            self._default_cam_quat = np.array([1.0, 0.0, 0.0, 0.0])
+            self._cam_id = None
+
+        # Cache extra light ID
+        try:
+            self._extra_light_id = model.light_name2id("extra_perturbation_light")
+        except Exception:
+            self._extra_light_id = None
+
+        # Assign materials to stone geoms and cache defaults
+        self._stone_geom_ids = []
+        self._stone_default_rgba = {}
+        for obj in self._stone_objects:
+            body_id = model.body_name2id(obj.root_body)
+            for gid in range(model.ngeom):
+                if (model.geom_bodyid[gid] == body_id) and (model.geom_group[gid] == 1):
+                    self._stone_geom_ids.append(gid)
+                    self._stone_default_rgba[gid] = model.geom_rgba[gid].copy()
+                    mat_name = "stone_mat_white" if "white" in obj.name else "stone_mat_black"
+                    try:
+                        mat_id = model.mat_name2id(mat_name)
+                        model.geom_matid[gid] = mat_id
+                    except Exception:
+                        pass
+
+        # Cache material defaults for stone material randomization
+        self._stone_mat_ids = set()
+        self._default_mat_shininess = {}
+        self._default_mat_specular = {}
+        for mat_name in ["stone_mat_white", "stone_mat_black"]:
+            try:
+                mid = model.mat_name2id(mat_name)
+                self._stone_mat_ids.add(mid)
+                self._default_mat_shininess[mid] = float(model.mat_shininess[mid])
+                self._default_mat_specular[mid] = float(model.mat_specular[mid])
+            except Exception:
+                pass
+
 
     def _reset_internal(self):
         super()._reset_internal()
         self._patch_physics_params()
+        self._randomize_board_position(rng=self.rng)
+        self._randomize_lighting(rng=self.rng)
+        self._randomize_camera(rng=self.rng)
+        self._randomize_stone_material(rng=self.rng)
+        self._randomize_table_material(rng=self.rng)
         for stone_idx in range(len(self._stone_objects)):
             self.hide_stone(stone_idx)
         self.sim.forward()
@@ -384,11 +670,15 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         model.opt.integrator = 2  # mjtIntegrator.mjINT_IMPLICIT
 
         # --- Solver options ---
+        model.opt.timestep = 0.0005
+        # Sync cached timestep so robosuite's substep loop
+        # (control_timestep / model_timestep) uses the new value.
+        self.model_timestep = model.opt.timestep
         model.opt.solver = 2  # mjtSolver.mjSOL_NEWTON
-        model.opt.iterations = 200
+        model.opt.iterations = 500
         model.opt.tolerance = 1e-10
-        model.opt.noslip_iterations = 20
-        model.opt.noslip_tolerance = 1e-8
+        model.opt.noslip_iterations = 100
+        model.opt.noslip_tolerance = 1e-9
 
         # --- Stone geom contact parameters ---
         for obj in self._stone_objects:
@@ -397,9 +687,9 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             for geom_id in range(model.ngeom):
                 if model.geom_bodyid[geom_id] == body_id:
                     model.geom_condim[geom_id] = 4
-                    model.geom_friction[geom_id] = [1.5, 0.05, 0.02]
+                    model.geom_friction[geom_id] = [1.5, 0.0698, 0.0785]
                     model.geom_solref[geom_id] = [0.002, 1.0]
-                    model.geom_solimp[geom_id] = [0.998, 0.998, 0.001, 0.5, 2.0]
+                    model.geom_solimp[geom_id] = [0.9932, 0.9932, 0.001, 0.5, 2.0]
                     model.geom_margin[geom_id] = 0.0002
                     model.geom_gap[geom_id] = 0.0
 
@@ -407,9 +697,9 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         try:
             board_geom_id = model.geom_name2id("go_board_surface_collision")
             model.geom_condim[board_geom_id] = 4
-            model.geom_friction[board_geom_id] = [1.5, 0.05, 0.02]
+            model.geom_friction[board_geom_id] = [1.5, 0.0698, 0.0785]
             model.geom_solref[board_geom_id] = [0.002, 1.0]
-            model.geom_solimp[board_geom_id] = [0.998, 0.998, 0.001, 0.5, 2.0]
+            model.geom_solimp[board_geom_id] = [0.9932, 0.9932, 0.001, 0.5, 2.0]
         except Exception:
             pass
 
@@ -418,9 +708,9 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             for name in ["table_collision", "table_visual"]:
                 gid = model.geom_name2id(name)
                 model.geom_condim[gid] = 4
-                model.geom_friction[gid] = [1.5, 0.05, 0.02]
+                model.geom_friction[gid] = [1.5, 0.0698, 0.0785]
                 model.geom_solref[gid] = [0.002, 1.0]
-                model.geom_solimp[gid] = [0.998, 0.998, 0.001, 0.5, 2.0]
+                model.geom_solimp[gid] = [0.9932, 0.9932, 0.001, 0.5, 2.0]
         except Exception:
             pass
 
@@ -430,6 +720,180 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
             dof_start = model.jnt_dofadr[jnt_id]
             for i in range(6):
                 model.dof_damping[dof_start + i] = 0.1
+
+    def _randomize_board_position(self, rng: np.random.RandomState) -> None:
+        """Shift the board ±1.5cm XY and optionally perturb surface color (absolute, not incremental)."""
+        shift_xy = rng.uniform(-self._board_shift_range, self._board_shift_range, size=(2,)).astype(np.float32)
+        self.board_center_xy = self._board_center_xy_default + shift_xy
+
+        model = self.sim.model
+        for name, default_pos in self._default_geom_pos.items():
+            try:
+                gid = model.geom_name2id(name)
+                model.geom_pos[gid, 0] = default_pos[0] + float(shift_xy[0])
+                model.geom_pos[gid, 1] = default_pos[1] + float(shift_xy[1])
+            except Exception:
+                pass
+
+        # Board rotation ±5deg around Z
+        rotation_rad = float(rng.uniform(np.radians(-5.0), np.radians(5.0)))
+        self._board_rotation_rad = rotation_rad
+        cos_r = np.cos(rotation_rad)
+        sin_r = np.sin(rotation_rad)
+        board_cx = float(self.board_center_xy[0])
+        board_cy = float(self.board_center_xy[1])
+
+        for name in self._default_geom_pos.keys():
+            try:
+                gid = model.geom_name2id(name)
+                # Rotate position around board center
+                px = model.geom_pos[gid, 0] - board_cx
+                py = model.geom_pos[gid, 1] - board_cy
+                model.geom_pos[gid, 0] = cos_r * px - sin_r * py + board_cx
+                model.geom_pos[gid, 1] = sin_r * px + cos_r * py + board_cy
+                # Rotate quaternion for line geoms and collision surface
+                if "line" in name or "collision" in name or "visual" in name:
+                    default_quat = self._default_geom_quat.get(name)
+                    if default_quat is not None:
+                        z_rot_quat = np.array([
+                            np.cos(rotation_rad * 0.5), 0.0, 0.0, np.sin(rotation_rad * 0.5),
+                        ], dtype=np.float64)
+                        model.geom_quat[gid] = self._quat_mul(z_rot_quat, default_quat)
+            except Exception:
+                pass
+
+        # Perturb board surface color, shininess, and specular
+        try:
+            color_perturb = rng.uniform(-0.06, 0.06, size=(3,))
+            model.mat_rgba[self._board_mat_id, :3] = np.clip(
+                self._default_board_mat_rgba[:3] + color_perturb, 0.0, 1.0
+            )
+            model.mat_shininess[self._board_mat_id] = np.clip(
+                self._default_board_mat_shininess + rng.uniform(-0.15, 0.15), 0.02, 0.6
+            )
+            model.mat_specular[self._board_mat_id] = np.clip(
+                self._default_board_mat_specular + rng.uniform(-0.2, 0.2), 0.05, 0.7
+            )
+        except Exception:
+            pass
+
+    def _randomize_lighting(self, rng: np.random.RandomState) -> None:
+        """Perturb light positions, directions, and intensities from defaults (absolute)."""
+        model = self.sim.model
+        extra_lid = getattr(self, "_extra_light_id", None)
+        for light_id in range(model.nlight):
+            if light_id == extra_lid:
+                continue
+            model.light_pos[light_id] = self._default_light_pos[light_id] + rng.uniform(-0.3, 0.3, size=(3,))
+            model.light_dir[light_id] = self._default_light_dir[light_id] + rng.uniform(-0.15, 0.15, size=(3,))
+            model.light_diffuse[light_id] = np.clip(
+                self._default_light_diffuse[light_id] + rng.uniform(-0.15, 0.15, size=(3,)),
+                0.1, 1.0,
+            )
+            model.light_ambient[light_id] = np.clip(
+                self._default_light_ambient[light_id] + rng.uniform(-0.08, 0.08, size=(3,)),
+                0.0, 0.5,
+            )
+            model.light_specular[light_id] = np.clip(
+                self._default_light_specular[light_id] + rng.uniform(-0.1, 0.1, size=(3,)),
+                0.0, 1.0,
+            )
+        # Perturb headlight from defaults
+        try:
+            if self._default_headlight_diffuse is not None:
+                model.vis.headlight.diffuse[:] = np.clip(
+                    self._default_headlight_diffuse + rng.uniform(-0.1, 0.1, size=(3,)),
+                    0.0, 1.0,
+                )
+            if self._default_headlight_ambient is not None:
+                model.vis.headlight.ambient[:] = np.clip(
+                    self._default_headlight_ambient + rng.uniform(-0.05, 0.05, size=(3,)),
+                    0.0, 0.5,
+                )
+        except Exception:
+            pass
+
+        # Extra perturbation light: P=0.4 activation
+        if extra_lid is not None:
+            if rng.random() < 0.4:
+                model.light_pos[extra_lid] = rng.uniform(-0.5, 0.5, size=(3,))
+                model.light_pos[extra_lid, 2] = max(1.0, model.light_pos[extra_lid, 2] + 1.5)
+                intensity = float(rng.uniform(0.15, 0.5))
+                model.light_diffuse[extra_lid] = np.full(3, intensity)
+                model.light_specular[extra_lid] = np.full(3, intensity * 0.5)
+            else:
+                model.light_diffuse[extra_lid] = np.zeros(3)
+                model.light_specular[extra_lid] = np.zeros(3)
+
+    @staticmethod
+    def _quat_mul(q1, q2):
+        """Multiply two quaternions (wxyz convention)."""
+        w1, x1, y1, z1 = q1
+        w2, x2, y2, z2 = q2
+        return np.array([
+            w1*w2 - x1*x2 - y1*y2 - z1*z2,
+            w1*x2 + x1*w2 + y1*z2 - z1*y2,
+            w1*y2 - x1*z2 + y1*w2 + z1*x2,
+            w1*z2 + x1*y2 - y1*x2 + z1*w2,
+        ], dtype=np.float64)
+
+    @staticmethod
+    def _euler_to_quat(euler_rad):
+        """Convert Euler angles (roll, pitch, yaw) to quaternion (wxyz)."""
+        cx, cy, cz = np.cos(np.asarray(euler_rad) * 0.5)
+        sx, sy, sz = np.sin(np.asarray(euler_rad) * 0.5)
+        return np.array([
+            cx*cy*cz + sx*sy*sz,
+            sx*cy*cz - cx*sy*sz,
+            cx*sy*cz + sx*cy*sz,
+            cx*cy*sz - sx*sy*cz,
+        ], dtype=np.float64)
+
+    def _randomize_camera(self, rng: np.random.RandomState) -> None:
+        """Perturb camera FOV (±15%) and angle (±5deg)."""
+        if getattr(self, "_cam_id", None) is None:
+            return
+        model = self.sim.model
+        # FOV variance ±10%
+        model.cam_fovy[self._cam_id] = self._default_cam_fovy * (1.0 + rng.uniform(-0.10, 0.10))
+        # Camera angle ±5deg
+        euler_deg = rng.uniform(-5.0, 5.0, size=(3,))
+        euler_rad = np.radians(euler_deg)
+        dq = self._euler_to_quat(euler_rad)
+        new_quat = self._quat_mul(self._default_cam_quat, dq)
+        model.cam_quat[self._cam_id] = new_quat
+
+    def _randomize_stone_material(self, rng: np.random.RandomState) -> None:
+        """Perturb stone shininess, specular, and color."""
+        model = self.sim.model
+        for mid in getattr(self, "_stone_mat_ids", set()):
+            default_shin = self._default_mat_shininess[mid]
+            default_spec = self._default_mat_specular[mid]
+            model.mat_shininess[mid] = np.clip(default_shin + rng.uniform(-0.2, 0.2), 0.05, 0.95)
+            model.mat_specular[mid] = np.clip(default_spec + rng.uniform(-0.3, 0.3), 0.1, 0.9)
+        for gid, default_rgba in getattr(self, "_stone_default_rgba", {}).items():
+            color_noise = rng.uniform(-0.05, 0.05, size=(3,))
+            model.geom_rgba[gid, :3] = np.clip(default_rgba[:3] + color_noise, 0.0, 1.0)
+
+    def _randomize_table_material(self, rng: np.random.RandomState) -> None:
+        """Swap table material (texture) and perturb tint, shininess, specular."""
+        model = self.sim.model
+        # Pick a random material from the pool and assign it to the table geom
+        idx = int(rng.integers(len(self._table_mat_ids)))
+        mid = self._table_mat_ids[idx]
+        model.geom_matid[self._table_visual_gid] = mid
+        # Slight color tint ±0.08 RGB
+        color_perturb = rng.uniform(-0.08, 0.08, size=(3,))
+        model.mat_rgba[mid, :3] = np.clip(
+            self._default_table_mat_rgba[mid][:3] + color_perturb, 0.0, 1.0
+        )
+        # Shininess and specular variation
+        model.mat_shininess[mid] = np.clip(
+            self._default_table_mat_shininess[mid] + rng.uniform(-0.15, 0.15), 0.02, 0.5
+        )
+        model.mat_specular[mid] = np.clip(
+            self._default_table_mat_specular[mid] + rng.uniform(-0.2, 0.2), 0.05, 0.6
+        )
 
     def _check_success(self):
         return False
@@ -442,7 +906,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         y0 = self.board_center_xy[1] - 0.26
         x = x0 + 0.026 * float(col)
         y = y0 + 0.026 * float(row)
-        z = self.table_top_z + self.stone_half_height + 0.0005
+        z = self.table_top_z + self.collision_stone_half_height + self._table_stone_clearance
         return np.array([x, y, z], dtype=np.float32)
 
     def set_stone_pose(self, stone_idx: int, pos: np.ndarray, quat_wxyz: Optional[np.ndarray] = None) -> None:
@@ -528,6 +992,7 @@ class GoRobosuiteBenchmarkEnv:
             robots=robot,
             controller_configs=controller_config,
             gripper_types=gripper_types,
+            initialization_noise={"magnitude": 0.08, "type": "uniform"},
             has_renderer=False,
             has_offscreen_renderer=True,
             render_camera="agentview",
@@ -559,6 +1024,7 @@ class GoRobosuiteBenchmarkEnv:
         self._intersection_xyz = self._rs_env.board_intersections_xyz.copy()
         self._source_xyz = self._rs_env.source_stone_xyz.copy()
         self.table_top_z = float(self._rs_env.table_top_z)
+        self.board_surface_z = float(self._rs_env.board_surface_z)
         self.stone_height = float(self._rs_env.stone_height)
         self.board_thickness = 0.0025
         self.hover_height = self.table_top_z + float(hover_height)
@@ -583,11 +1049,13 @@ class GoRobosuiteBenchmarkEnv:
         }
         self._stone_assignments: Dict[Tuple[int, int, int], int] = {}
         self._active_white_stone_idx: Optional[int] = None
+        self._stone_color: str = "white"
 
         self._step_count = 0
         self._move_committed = False
         self._success_step: Optional[int] = None
         self._queued_reset_options: Optional[GoResetOptions] = None
+        self._wb_shift = np.zeros(3, dtype=np.float32)
 
         self.reset()
 
@@ -690,7 +1158,7 @@ class GoRobosuiteBenchmarkEnv:
 
     def _place_stone_at_intersection(self, stone_idx: int, row: int, col: int) -> None:
         xyz = self._intersection_xyz[int(row), int(col)].copy()
-        xyz[2] += 0.005  # place 5mm above target, let physics settle
+        xyz[2] += self._rs_env._board_stone_clearance
         self._rs_env.set_stone_pose(stone_idx=int(stone_idx), pos=xyz)
 
 
@@ -767,10 +1235,18 @@ class GoRobosuiteBenchmarkEnv:
     def _spawn_active_stone(self) -> None:
         if self._active_white_stone_idx is not None:
             return
-        stone_idx = self._reserve_next_stone(player_id=SELF)
-        if stone_idx is None:
-            self._active_white_stone_idx = None
-            return
+        # Pick from the correct color pool
+        if self._stone_color == "black":
+            pool = self._available_stones[OPPONENT]
+            if not pool:
+                self._active_white_stone_idx = None
+                return
+            stone_idx = int(pool.pop(0))
+        else:
+            stone_idx = self._reserve_next_stone(player_id=SELF)
+            if stone_idx is None:
+                self._active_white_stone_idx = None
+                return
         self._active_white_stone_idx = int(stone_idx)
         spawn_xyz = self._source_xyz.copy()
         self._rs_env.set_stone_pose(stone_idx=self._active_white_stone_idx, pos=spawn_xyz)
@@ -859,8 +1335,16 @@ class GoRobosuiteBenchmarkEnv:
 
         self._rs_env.reset()
         self._logic.reset()
+        # board_intersections_xyz reads from geom_xpos, so XY shift +
+        # Z-rotation + body transform are already baked in.
         self._intersection_xyz = self._rs_env.board_intersections_xyz.copy()
         self._source_xyz = self._rs_env.source_stone_xyz.copy()
+        self.board_surface_z = float(self._rs_env.board_surface_z)
+
+        # White balance shift for color augmentation
+        self._wb_shift = self._rng.uniform(-0.08, 0.08, size=(3,)).astype(np.float32)
+
+        self.workspace_low, self.workspace_high = self._compute_workspace_bounds()
         self._available_stones = {
             SELF: self._rs_env.white_stone_indices,
             OPPONENT: self._rs_env.black_stone_indices,
@@ -874,6 +1358,12 @@ class GoRobosuiteBenchmarkEnv:
         self._success_step = None
         self._committed_stone_idx = None
 
+        # Choose stone color
+        if options.stone_color is not None:
+            self._stone_color = options.stone_color
+        else:
+            self._stone_color = self._rng.choice(["black", "white"])
+
         self.seed_random_opening(options.opening_moves)
         # Settle stones after opening placement; high joint damping (0.1)
         # and contact params allow fast convergence.
@@ -882,6 +1372,20 @@ class GoRobosuiteBenchmarkEnv:
             self.set_target_intersection(row=int(options.target_row), col=int(options.target_col))
         else:
             self.set_target_from_random_legal_move()
+
+        # Randomize source stone position near EEF
+        eef_xyz = self.get_eef_pose()[:3, 3]
+        stone_offset = self._rng.uniform(-0.015, 0.015, size=(2,))
+        source_xy = eef_xyz[:2] + stone_offset
+        source_xy = np.clip(source_xy, self.workspace_low[:2], self.workspace_high[:2])
+        self._source_xyz = np.array(
+            [source_xy[0], source_xy[1],
+             self._rs_env.table_top_z
+             + self._rs_env.collision_stone_half_height
+             + self._rs_env._table_stone_clearance],
+            dtype=np.float32,
+        )
+
         self._spawn_active_stone()
         self._settle_stones(num_steps=100)
         self._eef_trail = [self.get_eef_pose()[:3, 3].copy()]
@@ -892,6 +1396,7 @@ class GoRobosuiteBenchmarkEnv:
             opening_moves=int(options.opening_moves),
             target_row=options.target_row,
             target_col=options.target_col,
+            stone_color=options.stone_color,
         )
 
     def _nearest_intersection(self, xy: np.ndarray) -> Tuple[int, int, float]:
@@ -953,7 +1458,7 @@ class GoRobosuiteBenchmarkEnv:
 
     def get_board_origin_pose(self) -> np.ndarray:
         center = self._intersection_xyz.mean(axis=(0, 1))
-        center[2] = self.table_top_z
+        center[2] = self.board_surface_z
         return self._pose_from_xyz(center)
 
     def get_board_xy_bounds(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -991,6 +1496,13 @@ class GoRobosuiteBenchmarkEnv:
         }
         if self.include_image_obs:
             image = self.render(mode="rgb_array", height=self.camera_height, width=self.camera_width)
+            # Apply white balance shift before debug overlay
+            wb = getattr(self, "_wb_shift", None)
+            if wb is not None and np.any(np.abs(wb) > 1e-6):
+                img_f = image.astype(np.float32)
+                for c in range(3):
+                    img_f[:, :, c] *= (1.0 + wb[c])
+                image = np.clip(img_f, 0, 255).astype(np.uint8)
             if self.render_eef_overlay:
                 image = self._overlay_debug_markers(image=image)
             obs["agentview_image"] = image
@@ -1136,17 +1648,12 @@ class GoRobosuiteBenchmarkEnv:
         fovy = sim.model.cam_fovy[cam_id]
         f = (0.5 * height) / np.tan(np.radians(fovy) * 0.5)
 
-        col = f * p_cam[0] / depth + width * 0.5
-        row = f * (-p_cam[1]) / depth + height * 0.5
+        col = f * p_cam[0] / depth + (width - 1) * 0.5
+        row = f * (-p_cam[1]) / depth + (height - 1) * 0.5
 
         col = int(np.clip(round(col), 0, width - 1))
         row = int(np.clip(round(row), 0, height - 1))
         return row, col
-
-    def _xy_to_image_rc(self, xy: np.ndarray, height: int, width: int) -> Tuple[int, int]:
-        """Project a world XY point (at board height) to image coordinates."""
-        xyz = np.array([xy[0], xy[1], self.table_top_z], dtype=np.float64)
-        return self._world_to_image_rc(xyz, height, width)
 
     @staticmethod
     def _draw_disk(image: np.ndarray, row: int, col: int, radius: int, color: np.ndarray) -> None:
@@ -1163,7 +1670,15 @@ class GoRobosuiteBenchmarkEnv:
     def _overlay_debug_markers(self, image: np.ndarray) -> np.ndarray:
         rendered = image.copy()
         h, w = rendered.shape[:2]
-        target_rc = self._world_to_image_rc(self._target_pose[:3, 3], h, w)
+        # Project at the line geom Z height so the dot lands on the visible
+        # grid intersection (line geoms sit on top of the board surface).
+        target_vis_xyz = self._target_pose[:3, 3].copy()
+        try:
+            board_gid = self._rs_env.sim.model.geom_name2id("go_board_surface_visual")
+            target_vis_xyz[2] = float(self._rs_env.sim.data.geom_xpos[board_gid, 2])
+        except Exception:
+            pass
+        target_rc = self._world_to_image_rc(target_vis_xyz, h, w)
         self._draw_disk(
             rendered,
             row=target_rc[0],
