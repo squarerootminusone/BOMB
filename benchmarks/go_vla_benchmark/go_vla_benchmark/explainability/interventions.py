@@ -12,7 +12,7 @@ from .core import EpisodeClip, LocalExplanationStep, _to_object_array, compute_e
 
 
 INTERVENTION_TRACE_FORMAT = "openvla_intervention_tests_v1"
-INTERVENTION_SCHEMA_VERSION = 1
+INTERVENTION_SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -24,6 +24,8 @@ class InterventionCandidateEffect:
     raw_pred_action: Optional[np.ndarray] = None
     target_token_ids: Optional[np.ndarray] = None
     target_token_probs: Optional[np.ndarray] = None
+    task_char_start: Optional[int] = None
+    task_char_end: Optional[int] = None
 
 
 @dataclass
@@ -111,7 +113,7 @@ class InterventionModelAdapter(Protocol):
         baseline_step: LocalExplanationStep,
         top_k: int,
     ) -> InterventionScan:
-        """Evaluate instruction-token masking interventions."""
+        """Evaluate instruction word / phrase masking interventions."""
 
     def minimal_counterfactual_edits(
         self,
@@ -216,6 +218,8 @@ def _candidate_to_dict(candidate: InterventionCandidateEffect) -> Dict[str, obje
         "raw_pred_action": None if candidate.raw_pred_action is None else np.asarray(candidate.raw_pred_action).tolist(),
         "target_token_ids": None if candidate.target_token_ids is None else np.asarray(candidate.target_token_ids).tolist(),
         "target_token_probs": None if candidate.target_token_probs is None else np.asarray(candidate.target_token_probs).tolist(),
+        "task_char_start": None if candidate.task_char_start is None else int(candidate.task_char_start),
+        "task_char_end": None if candidate.task_char_end is None else int(candidate.task_char_end),
     }
 
 
@@ -228,6 +232,8 @@ def _candidate_from_dict(payload: Dict[str, object]) -> InterventionCandidateEff
         raw_pred_action=None if payload.get("raw_pred_action") is None else np.asarray(payload["raw_pred_action"], dtype=np.float32),
         target_token_ids=None if payload.get("target_token_ids") is None else np.asarray(payload["target_token_ids"], dtype=np.int64),
         target_token_probs=None if payload.get("target_token_probs") is None else np.asarray(payload["target_token_probs"], dtype=np.float32),
+        task_char_start=None if payload.get("task_char_start") is None else int(payload["task_char_start"]),
+        task_char_end=None if payload.get("task_char_end") is None else int(payload["task_char_end"]),
     )
 
 
@@ -440,4 +446,3 @@ def intervention_trace_manifest(
         "num_episodes": len(items),
         "episodes": items,
     }
-

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -14,6 +15,14 @@ from .interventions import CounterfactualEdit, InterventionCandidateEffect, Inte
 
 
 BLANK_ACTION_TOKEN_ID = 29871
+_WORD_SPAN_PATTERN = re.compile(r"\b[a-z0-9]+\b", flags=re.IGNORECASE)
+_TEXT_MASK_PATTERNS = (
+    re.compile(r"position\s*\(\s*\d+\s*,\s*\d+\s*\)", flags=re.IGNORECASE),
+    re.compile(r"\(\s*\d+\s*,\s*\d+\s*\)", flags=re.IGNORECASE),
+    re.compile(r"row\s+\d+", flags=re.IGNORECASE),
+    re.compile(r"column\s+\d+", flags=re.IGNORECASE),
+    re.compile(r"go\s+board", flags=re.IGNORECASE),
+)
 
 
 @dataclass(frozen=True)
@@ -23,6 +32,15 @@ class _PromptContext:
     instruction_token_positions: np.ndarray
     instruction_token_ids: np.ndarray
     instruction_tokens: List[str]
+    text_mask_candidates: List["_TextMaskCandidate"]
+
+
+@dataclass(frozen=True)
+class _TextMaskCandidate:
+    label: str
+    prompt_token_positions: np.ndarray
+    task_char_start: int
+    task_char_end: int
 
 
 @dataclass
@@ -126,7 +144,12 @@ def _normalize_vector(values: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     return values / total
 
 
-def _find_instruction_tokens(tokenizer, prompt: str, prefix: str, task_text: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+def _find_instruction_tokens(
+    tokenizer,
+    prompt: str,
+    prefix: str,
+    task_text: str,
+) -> Tuple[np.ndarray, np.ndarray, List[str], np.ndarray]:
     prompt_inputs = tokenizer(prompt, add_special_tokens=False, return_offsets_mapping=True)
     prompt_ids = np.asarray(prompt_inputs["input_ids"], dtype=np.int64)
     offset_mapping = prompt_inputs.get("offset_mapping")
@@ -142,11 +165,12 @@ def _find_instruction_tokens(tokenizer, prompt: str, prefix: str, task_text: str
         if positions:
             instruction_token_positions = np.asarray(positions, dtype=np.int64)
             instruction_token_ids = prompt_ids[instruction_token_positions]
+            instruction_offsets = np.asarray([offset_mapping[idx] for idx in instruction_token_positions.tolist()], dtype=np.int64)
             if hasattr(tokenizer, "convert_ids_to_tokens"):
                 instruction_tokens = [str(token) for token in tokenizer.convert_ids_to_tokens(instruction_token_ids.tolist())]
             else:
                 instruction_tokens = [tokenizer.decode([int(token_id)]) for token_id in instruction_token_ids]
-            return instruction_token_positions, instruction_token_ids, instruction_tokens
+            return instruction_token_positions, instruction_token_ids, instruction_tokens, instruction_offsets
 
     prefix_ids = tokenizer(prefix, add_special_tokens=False)["input_ids"]
     prefix_task_ids = tokenizer(prefix + task_text, add_special_tokens=False)["input_ids"]
@@ -158,7 +182,81 @@ def _find_instruction_tokens(tokenizer, prompt: str, prefix: str, task_text: str
         instruction_tokens = [str(token) for token in tokenizer.convert_ids_to_tokens(instruction_token_ids.tolist())]
     else:
         instruction_tokens = [tokenizer.decode([int(token_id)]) for token_id in instruction_token_ids]
-    return instruction_token_positions, instruction_token_ids, instruction_tokens
+    return instruction_token_positions, instruction_token_ids, instruction_tokens, np.zeros((instruction_token_positions.shape[0], 2), dtype=np.int64)
+
+
+def _collect_text_mask_spans(task_text: str) -> List[Tuple[str, int, int]]:
+    spans: List[Tuple[str, int, int]] = []
+    seen: set[Tuple[int, int]] = set()
+
+    def add_span(start: int, end: int) -> None:
+        start = int(start)
+        end = int(end)
+        if start < 0 or end <= start:
+            return
+        key = (start, end)
+        if key in seen:
+            return
+        label = task_text[start:end].strip()
+        if not label:
+            return
+        seen.add(key)
+        spans.append((label, start, end))
+
+    for pattern in _TEXT_MASK_PATTERNS:
+        for match in pattern.finditer(task_text):
+            add_span(match.start(), match.end())
+    for match in _WORD_SPAN_PATTERN.finditer(task_text):
+        add_span(match.start(), match.end())
+
+    spans.sort(key=lambda item: (item[1], -(item[2] - item[1]), item[0]))
+    return spans
+
+
+def _build_text_mask_candidates(
+    task_text: str,
+    prefix_len: int,
+    instruction_token_positions: np.ndarray,
+    instruction_token_offsets: np.ndarray,
+    instruction_tokens: Sequence[str],
+) -> List[_TextMaskCandidate]:
+    valid_offsets = (
+        instruction_token_offsets.ndim == 2
+        and instruction_token_offsets.shape[0] == instruction_token_positions.shape[0]
+        and instruction_token_offsets.shape[1] == 2
+        and bool(np.any(instruction_token_offsets[:, 1] > instruction_token_offsets[:, 0]))
+    )
+
+    candidates: List[_TextMaskCandidate] = []
+    if valid_offsets:
+        for label, start, end in _collect_text_mask_spans(task_text):
+            prompt_start = prefix_len + int(start)
+            prompt_end = prefix_len + int(end)
+            overlap = (instruction_token_offsets[:, 1] > prompt_start) & (instruction_token_offsets[:, 0] < prompt_end)
+            prompt_positions = instruction_token_positions[overlap]
+            if prompt_positions.size == 0:
+                continue
+            candidates.append(
+                _TextMaskCandidate(
+                    label=label,
+                    prompt_token_positions=np.asarray(prompt_positions, dtype=np.int64),
+                    task_char_start=int(start),
+                    task_char_end=int(end),
+                )
+            )
+        if candidates:
+            return candidates
+
+    for token_position, token in zip(instruction_token_positions.tolist(), instruction_tokens):
+        candidates.append(
+            _TextMaskCandidate(
+                label=str(token),
+                prompt_token_positions=np.asarray([int(token_position)], dtype=np.int64),
+                task_char_start=-1,
+                task_char_end=-1,
+            )
+        )
+    return candidates
 
 
 def _extract_hook_tensor(output):
@@ -228,11 +326,18 @@ class OpenVLAExplainabilityAdapter:
             return cached
 
         tokenizer = self.processor.tokenizer
-        instruction_token_positions, instruction_token_ids, instruction_tokens = _find_instruction_tokens(
+        instruction_token_positions, instruction_token_ids, instruction_tokens, instruction_token_offsets = _find_instruction_tokens(
             tokenizer=tokenizer,
             prompt=prompt,
             prefix=prefix,
             task_text=task_text,
+        )
+        text_mask_candidates = _build_text_mask_candidates(
+            task_text=task_text,
+            prefix_len=len(prefix),
+            instruction_token_positions=instruction_token_positions,
+            instruction_token_offsets=instruction_token_offsets,
+            instruction_tokens=instruction_tokens,
         )
 
         context = _PromptContext(
@@ -241,6 +346,7 @@ class OpenVLAExplainabilityAdapter:
             instruction_token_positions=instruction_token_positions,
             instruction_token_ids=instruction_token_ids,
             instruction_tokens=instruction_tokens,
+            text_mask_candidates=text_mask_candidates,
         )
         self._prompt_cache[cache_key] = context
         return context
@@ -611,23 +717,24 @@ class OpenVLAExplainabilityAdapter:
         prompt_context = self._prompt_context(instruction)
         baseline_logprob = float(np.log(np.clip(np.asarray(baseline_step.target_token_probs, dtype=np.float32), 1e-12, 1.0)).sum())
 
-        count = int(prompt_context.instruction_token_positions.size)
+        count = int(len(prompt_context.text_mask_candidates))
         effects = np.zeros((count,), dtype=np.float32)
-        for token_index in range(count):
-            masked_positions = prompt_context.instruction_token_positions[token_index : token_index + 1]
+        for candidate_index, candidate in enumerate(prompt_context.text_mask_candidates):
+            masked_positions = np.asarray(candidate.prompt_token_positions, dtype=np.int64)
             score = self.score_target_tokens(
                 image=image,
                 instruction=instruction,
                 target_token_ids=baseline_step.target_token_ids,
                 masked_instruction_positions=masked_positions,
             )
-            effects[token_index] = np.float32(baseline_logprob - score.sequence_logprob)
+            effects[candidate_index] = np.float32(baseline_logprob - score.sequence_logprob)
 
         order = np.argsort(-effects, kind="stable")
         limit = 0 if top_k <= 0 else min(int(top_k), int(order.shape[0]))
         candidates: List[InterventionCandidateEffect] = []
-        for token_index in order[:limit]:
-            masked_positions = prompt_context.instruction_token_positions[int(token_index) : int(token_index) + 1]
+        for candidate_index in order[:limit]:
+            candidate = prompt_context.text_mask_candidates[int(candidate_index)]
+            masked_positions = np.asarray(candidate.prompt_token_positions, dtype=np.int64)
             decoded = self.predict_step(
                 image=image,
                 instruction=instruction,
@@ -635,13 +742,15 @@ class OpenVLAExplainabilityAdapter:
             )
             candidates.append(
                 InterventionCandidateEffect(
-                    index=int(token_index),
-                    label=str(prompt_context.instruction_tokens[int(token_index)]),
-                    score=float(effects[token_index]),
+                    index=int(candidate_index),
+                    label=str(candidate.label),
+                    score=float(effects[candidate_index]),
                     pred_action_xyzg=np.asarray(decoded.pred_action_xyzg, dtype=np.float32),
                     raw_pred_action=np.asarray(decoded.raw_pred_action, dtype=np.float32),
                     target_token_ids=np.asarray(decoded.target_token_ids, dtype=np.int64),
                     target_token_probs=np.asarray(decoded.target_token_probs, dtype=np.float32),
+                    task_char_start=int(candidate.task_char_start),
+                    task_char_end=int(candidate.task_char_end),
                 )
             )
         return InterventionScan(effect_map=effects, top_candidates=candidates)
@@ -668,23 +777,39 @@ class OpenVLAExplainabilityAdapter:
         for patch_index, score in enumerate(np.asarray(patch_occlusion.effect_map, dtype=np.float32).reshape(-1)):
             row, col = divmod(int(patch_index), grid_side)
             ranked_candidates.append(("patch", int(patch_index), f"patch ({row}, {col})", float(score)))
-        for token_index, score in enumerate(np.asarray(text_masking.effect_map, dtype=np.float32).reshape(-1)):
-            ranked_candidates.append(("text", int(token_index), str(prompt_context.instruction_tokens[token_index]), float(score)))
+        for candidate_index, score in enumerate(np.asarray(text_masking.effect_map, dtype=np.float32).reshape(-1)):
+            label = (
+                prompt_context.text_mask_candidates[candidate_index].label
+                if candidate_index < len(prompt_context.text_mask_candidates)
+                else f"text span {candidate_index}"
+            )
+            ranked_candidates.append(("text", int(candidate_index), str(label), float(score)))
         ranked_candidates.sort(key=lambda item: item[3], reverse=True)
 
         selected_patches: List[int] = []
-        selected_tokens: List[int] = []
+        selected_mask_positions: set[int] = set()
         edits: List[CounterfactualEdit] = []
         success = False
 
-        for rank, (edit_type, index, label, single_effect_score) in enumerate(ranked_candidates[: max(0, int(max_edits))], start=1):
+        max_edits = max(0, int(max_edits))
+        for edit_type, index, label, single_effect_score in ranked_candidates:
+            if len(edits) >= max_edits:
+                break
             if edit_type == "patch":
                 selected_patches.append(index)
             else:
-                selected_tokens.append(index)
+                if index < 0 or index >= len(prompt_context.text_mask_candidates):
+                    continue
+                candidate_positions = np.asarray(prompt_context.text_mask_candidates[index].prompt_token_positions, dtype=np.int64).reshape(-1)
+                if candidate_positions.size == 0:
+                    continue
+                candidate_position_set = set(int(item) for item in candidate_positions.tolist())
+                if candidate_position_set.issubset(selected_mask_positions):
+                    continue
+                selected_mask_positions.update(candidate_position_set)
 
             modified_image = self._apply_patch_occlusions(image=image, patch_indices=selected_patches, grid_side=grid_side)
-            masked_positions = prompt_context.instruction_token_positions[np.asarray(selected_tokens, dtype=np.int64)] if selected_tokens else None
+            masked_positions = None if not selected_mask_positions else np.asarray(sorted(selected_mask_positions), dtype=np.int64)
             decoded = self.predict_step(
                 image=modified_image,
                 instruction=instruction,
@@ -702,7 +827,7 @@ class OpenVLAExplainabilityAdapter:
             )
             edits.append(
                 CounterfactualEdit(
-                    step_rank=rank,
+                    step_rank=len(edits) + 1,
                     edit_type=edit_type,
                     index=index,
                     label=label,
@@ -770,12 +895,13 @@ class OpenVLAExplainabilityAdapter:
             if corruption_index is None:
                 text_scan = self.text_masking(image=image, instruction=instruction, baseline_step=baseline_step, top_k=0)
                 if np.asarray(text_scan.effect_map).size == 0:
-                    raise RuntimeError("no instruction tokens available for text masking")
+                    raise RuntimeError("no instruction spans available for text masking")
                 corruption_index = int(np.argmax(np.asarray(text_scan.effect_map, dtype=np.float32)))
-            if int(corruption_index) < 0 or int(corruption_index) >= len(prompt_context.instruction_tokens):
+            if int(corruption_index) < 0 or int(corruption_index) >= len(prompt_context.text_mask_candidates):
                 raise IndexError(f"text corruption index out of range: {corruption_index}")
-            masked_positions = prompt_context.instruction_token_positions[int(corruption_index) : int(corruption_index) + 1]
-            return np.asarray(image, dtype=np.uint8).copy(), masked_positions, int(corruption_index), str(prompt_context.instruction_tokens[int(corruption_index)])
+            candidate = prompt_context.text_mask_candidates[int(corruption_index)]
+            masked_positions = np.asarray(candidate.prompt_token_positions, dtype=np.int64)
+            return np.asarray(image, dtype=np.uint8).copy(), masked_positions, int(corruption_index), str(candidate.label)
 
         raise ValueError(f"unsupported corruption_type: {corruption_type}")
 

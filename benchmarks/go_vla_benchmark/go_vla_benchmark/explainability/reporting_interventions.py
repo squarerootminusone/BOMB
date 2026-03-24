@@ -124,7 +124,26 @@ def _mask_display_token(token: str) -> str:
     return (" " * leading_ws) + ("█" * body_len)
 
 
-def _masked_query_text(step: InterventionStepTrace, masked_index: int) -> str:
+def _mask_display_span(text: str, start: int, end: int) -> str:
+    chars = list(text)
+    start = max(0, int(start))
+    end = min(len(chars), int(end))
+    for idx in range(start, end):
+        if chars[idx].isalnum():
+            chars[idx] = "█"
+    return _normalize_display_text("".join(chars))
+
+
+def _masked_query_text(step: InterventionStepTrace, candidate: InterventionCandidateEffect) -> str:
+    if (
+        candidate.task_char_start is not None
+        and candidate.task_char_end is not None
+        and int(candidate.task_char_end) > int(candidate.task_char_start)
+        and int(candidate.task_char_start) >= 0
+    ):
+        return _mask_display_span(_display_query_text(step), int(candidate.task_char_start), int(candidate.task_char_end))
+
+    masked_index = int(candidate.index)
     pieces: List[str] = []
     for token_index, token in enumerate(step.text_tokens):
         pieces.append(_mask_display_token(token) if token_index == masked_index else _token_to_display_piece(token))
@@ -132,6 +151,8 @@ def _masked_query_text(step: InterventionStepTrace, masked_index: int) -> str:
 
 
 def _display_query_text(step: InterventionStepTrace) -> str:
+    if step.task_text:
+        return _normalize_display_text(step.task_text)
     if step.text_tokens:
         return _tokens_to_text(step.text_tokens)
     return _normalize_display_text(step.task_text)
@@ -141,7 +162,7 @@ def _format_mask_label(label: str, index: int) -> str:
     display = _tokens_to_text([label]).strip()
     if display:
         return display
-    return f"token {index}"
+    return f"span {index}"
 
 
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> List[str]:
@@ -172,15 +193,17 @@ def _text_block_height(draw: ImageDraw.ImageDraw, lines: Sequence[str], font: Im
     return bbox[3] - bbox[1]
 
 
-def _text_mask_rows(step: InterventionStepTrace, limit: int = 5) -> List[tuple[str, str]]:
+def _text_mask_candidates(step: InterventionStepTrace, limit: Optional[int] = None) -> List[InterventionCandidateEffect]:
     if step.text_masking is None:
         return []
-    candidates = list(step.text_masking.top_candidates[:limit])
+    candidates = list(step.text_masking.top_candidates if limit is None else step.text_masking.top_candidates[:limit])
     if not candidates:
         scores = np.asarray(step.text_masking.effect_map, dtype=np.float32).reshape(-1)
-        order = np.argsort(-scores, kind="stable")[:limit]
+        order = np.argsort(-scores, kind="stable")
+        if limit is not None:
+            order = order[:limit]
         for token_index in order.tolist():
-            label = step.text_tokens[token_index] if token_index < len(step.text_tokens) else f"token {token_index}"
+            label = step.text_tokens[token_index] if token_index < len(step.text_tokens) else f"span {token_index}"
             candidates.append(
                 InterventionCandidateEffect(
                     index=int(token_index),
@@ -188,12 +211,16 @@ def _text_mask_rows(step: InterventionStepTrace, limit: int = 5) -> List[tuple[s
                     score=float(scores[token_index]),
                 )
             )
+    return candidates
 
+
+def _text_mask_rows(step: InterventionStepTrace, limit: int = 5) -> List[tuple[str, str]]:
+    candidates = _text_mask_candidates(step, limit=limit)
     rows: List[tuple[str, str]] = []
     for rank, candidate in enumerate(candidates, start=1):
         label = _format_mask_label(candidate.label, int(candidate.index))
         title = f"Mask {rank}: {label} ({float(candidate.score):.4f})"
-        rows.append((title, _masked_query_text(step, int(candidate.index))))
+        rows.append((title, _masked_query_text(step, candidate)))
     return rows
 
 
@@ -203,88 +230,19 @@ def _render_intervention_panel(
     step_idx: int,
     output_path: Path,
 ) -> None:
-    if step.patch_occlusion is None and step.text_masking is None:
+    if step.patch_occlusion is None:
         return
 
     frame = clip.images[step_idx]
     frame_h, frame_w = frame.shape[:2]
-    has_patch = step.patch_occlusion is not None
-    frame_gap = 18
-    image_columns = 2 if has_patch else 1
-    image_section_width = (frame_w * image_columns) + (frame_gap * max(0, image_columns - 1))
-    canvas_w = max(image_section_width + 36, 760)
-    temp_canvas = Image.new("RGB", (canvas_w, 32), BG_COLOR)
-    temp_draw = ImageDraw.Draw(temp_canvas)
-    fonts = {"title": _load_font(20), "body": _load_font(15), "meta": _load_font(13)}
-
-    text_section_height = 0
-    if step.text_masking is not None:
-        content_width = canvas_w - 72
-        text_section_height = 24
-        text_section_height += _text_block_height(temp_draw, _wrap_text(temp_draw, _display_query_text(step), fonts["body"], content_width), fonts["body"])
-        text_section_height += 24
-        for title, masked_text in _text_mask_rows(step):
-            text_section_height += _text_block_height(temp_draw, _wrap_text(temp_draw, title, fonts["meta"], content_width), fonts["meta"])
-            text_section_height += 6
-            text_section_height += _text_block_height(temp_draw, _wrap_text(temp_draw, masked_text, fonts["body"], content_width), fonts["body"])
-            text_section_height += 18
-        text_section_height += 18
-
-    header_h = 90
-    bottom_margin = 18
-    section_gap = 18 if text_section_height > 0 else 0
-    canvas_h = header_h + frame_h + section_gap + text_section_height + bottom_margin
+    frame_gap = 12
+    margin = 12
+    canvas_w = (2 * frame_w) + frame_gap + (2 * margin)
+    canvas_h = frame_h + (2 * margin)
     canvas = Image.new("RGB", (canvas_w, canvas_h), BG_COLOR)
-    draw = ImageDraw.Draw(canvas)
-
-    draw.text((18, 16), f"{clip.demo_key} step {step_idx}", font=fonts["title"], fill=TEXT_PRIMARY)
-    draw.text((18, 44), f"frame_index {int(clip.frame_indices[step_idx])}", font=fonts["meta"], fill=TEXT_MUTED)
-    panel_caption = "patch occlusion and text masking impact on baseline-token log-probability"
-    if step.patch_occlusion is None:
-        panel_caption = "text masking candidates for the original frame"
-    elif step.text_masking is None:
-        panel_caption = "patch occlusion impact on baseline-token log-probability"
-    draw.text((18, 64), panel_caption, font=fonts["body"], fill=TEXT_PRIMARY)
-
-    top_y = header_h
-    start_x = max(18, (canvas_w - image_section_width) // 2)
-    left_box = (start_x, top_y, start_x + frame_w, top_y + frame_h)
-    draw.rounded_rectangle(left_box, radius=14, fill=PANEL_BG, outline=PANEL_BORDER, width=1)
-    canvas.paste(Image.fromarray(frame), (left_box[0], left_box[1]))
-    draw.text((left_box[0] + 12, left_box[1] + 10), "original frame", font=fonts["meta"], fill=TEXT_MUTED)
-
-    if has_patch:
-        heat_grid = np.asarray(step.patch_occlusion.effect_map, dtype=np.float32)
-        right_x = start_x + frame_w + frame_gap
-        right_box = (right_x, top_y, right_x + frame_w, top_y + frame_h)
-        draw.rounded_rectangle(right_box, radius=14, fill=PANEL_BG, outline=PANEL_BORDER, width=1)
-        canvas.paste(Image.fromarray(_overlay(frame, heat_grid)), (right_box[0], right_box[1]))
-        draw.text((right_box[0] + 12, right_box[1] + 10), "patch occlusion heatmap", font=fonts["meta"], fill=TEXT_MUTED)
-
-    if step.text_masking is not None:
-        card_top = top_y + frame_h + section_gap
-        card_box = (18, card_top, canvas_w - 18, canvas_h - bottom_margin)
-        draw.rounded_rectangle(card_box, radius=14, fill=PANEL_BG, outline=PANEL_BORDER, width=1)
-        cursor_y = card_box[1] + 18
-        content_x = card_box[0] + 18
-        content_width = (card_box[2] - card_box[0]) - 36
-
-        draw.text((content_x, cursor_y), "Original query", font=fonts["meta"], fill=ACCENT)
-        cursor_y += 22
-        original_lines = _wrap_text(draw, _display_query_text(step), fonts["body"], content_width)
-        draw.multiline_text((content_x, cursor_y), "\n".join(original_lines), font=fonts["body"], fill=TEXT_PRIMARY, spacing=4)
-        cursor_y += _text_block_height(draw, original_lines, fonts["body"]) + 18
-
-        draw.text((content_x, cursor_y), "Top text occlusions", font=fonts["meta"], fill=ACCENT)
-        cursor_y += 22
-        for title, masked_text in _text_mask_rows(step):
-            title_lines = _wrap_text(draw, title, fonts["meta"], content_width)
-            draw.multiline_text((content_x, cursor_y), "\n".join(title_lines), font=fonts["meta"], fill=TEXT_MUTED, spacing=4)
-            cursor_y += _text_block_height(draw, title_lines, fonts["meta"]) + 6
-
-            body_lines = _wrap_text(draw, masked_text, fonts["body"], content_width)
-            draw.multiline_text((content_x, cursor_y), "\n".join(body_lines), font=fonts["body"], fill=TEXT_PRIMARY, spacing=4)
-            cursor_y += _text_block_height(draw, body_lines, fonts["body"]) + 18
+    heat_grid = np.asarray(step.patch_occlusion.effect_map, dtype=np.float32)
+    canvas.paste(Image.fromarray(frame), (margin, margin))
+    canvas.paste(Image.fromarray(_overlay(frame, heat_grid)), (margin + frame_w + frame_gap, margin))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path)
@@ -316,6 +274,7 @@ def _step_payload(
     return {
         "demo_key": clip.demo_key,
         "instruction": clip.instruction,
+        "task_text": _display_query_text(step),
         "step_index": step_idx,
         "frame_index": int(clip.frame_indices[step_idx]),
         "step_l1": float(trace.step_errors[step_idx]),
@@ -339,15 +298,19 @@ def _step_payload(
         "text_masking": None
         if step.text_masking is None
         else {
+            "original_query": _display_query_text(step),
             "effect_map": np.asarray(step.text_masking.effect_map, dtype=np.float32).tolist(),
             "top_candidates": [
                 {
                     "index": item.index,
                     "label": item.label,
                     "score": float(item.score),
+                    "task_char_start": item.task_char_start,
+                    "task_char_end": item.task_char_end,
+                    "masked_query": _masked_query_text(step, item),
                     "predicted_token_ids": None if item.target_token_ids is None else np.asarray(item.target_token_ids, dtype=np.int64).tolist(),
                 }
-                for item in step.text_masking.top_candidates
+                for item in _text_mask_candidates(step, limit=None)
             ],
         },
         "counterfactual_success": bool(step.counterfactual_success),
@@ -373,7 +336,13 @@ def _write_step_markdown(payload: Dict[str, object], output_path: Path) -> None:
     text_rows = []
     if payload["text_masking"] is not None:
         text_rows = [
-            (item["index"], item["label"], f"{float(item['score']):.4f}", " ".join(str(tok) for tok in item["predicted_token_ids"] or []))
+            (
+                item["index"],
+                item["label"],
+                f"{float(item['score']):.4f}",
+                item.get("masked_query", ""),
+                " ".join(str(tok) for tok in item["predicted_token_ids"] or []),
+            )
             for item in payload["text_masking"]["top_candidates"]
         ]
     counterfactual_rows = [
@@ -413,11 +382,21 @@ def _write_step_markdown(payload: Dict[str, object], output_path: Path) -> None:
         else "Patch occlusion was not run for this step."
     )
     lines.extend(["", "## Text Masking", ""])
-    lines.append(
-        _format_markdown_table(text_rows, headers=["index", "label", "logprob_drop", "predicted_token_ids"])
-        if text_rows
-        else "Text masking was not run for this step."
-    )
+    if payload["text_masking"] is not None:
+        lines.extend(
+            [
+                f"Original query: `{payload['text_masking']['original_query']}`",
+                "",
+                _format_markdown_table(
+                    text_rows,
+                    headers=["index", "label", "logprob_drop", "masked_query", "predicted_token_ids"],
+                )
+                if text_rows
+                else "Text masking was not run for this step.",
+            ]
+        )
+    else:
+        lines.append("Text masking was not run for this step.")
     lines.extend(["", "## Minimal Counterfactual Edits", ""])
     lines.append(
         _format_markdown_table(
@@ -467,7 +446,7 @@ def export_intervention_report(
         for step_idx, step in enumerate(trace.steps):
             step_name = f"step_{step_idx:03d}"
             panel_name = None
-            if step.patch_occlusion is not None or step.text_masking is not None:
+            if step.patch_occlusion is not None:
                 panel_name = f"{step_name}_intervention_panel.png"
                 _render_intervention_panel(
                     clip=clip,

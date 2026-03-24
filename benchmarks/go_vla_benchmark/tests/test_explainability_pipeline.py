@@ -109,18 +109,23 @@ class _FakeInterventionAdapter(_FakeModelAdapter):
         baseline_step: LocalExplanationStep,
         top_k: int,
     ) -> InterventionScan:
-        del image, instruction, baseline_step, top_k
+        del image, baseline_step, top_k
+        task_text = instruction.lower()
+        stone_start = task_text.find("stone")
+        stone_end = stone_start + len("stone") if stone_start >= 0 else -1
         return InterventionScan(
             effect_map=np.asarray([0.25, 0.15], dtype=np.float32),
             top_candidates=[
                 InterventionCandidateEffect(
                     index=0,
-                    label="place",
+                    label="stone",
                     score=0.25,
                     pred_action_xyzg=np.asarray([0.4, 0.1, -0.2, -1.0], dtype=np.float32),
                     raw_pred_action=np.asarray([0.4, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
                     target_token_ids=np.asarray([31, 32, 33], dtype=np.int64),
                     target_token_probs=np.asarray([0.6, 0.5, 0.4], dtype=np.float32),
+                    task_char_start=None if stone_start < 0 else stone_start,
+                    task_char_end=None if stone_start < 0 else stone_end,
                 )
             ],
         )
@@ -155,7 +160,7 @@ class _FakeInterventionAdapter(_FakeModelAdapter):
                     step_rank=2,
                     edit_type="text",
                     index=0,
-                    label="place",
+                    label="stone",
                     single_effect_score=0.25,
                     cumulative_sequence_logprob=-1.7,
                     cumulative_sequence_logprob_drop=0.80,
@@ -330,7 +335,7 @@ class ExplainabilityPipelineTest(unittest.TestCase):
 
             bundle = load_intervention_trace_file(trace_path)
             self.assertEqual(bundle.trace_format, "openvla_intervention_tests_v1")
-            self.assertEqual(bundle.traces["demo_0"].steps[0].text_masking.top_candidates[0].label, "place")
+            self.assertEqual(bundle.traces["demo_0"].steps[0].text_masking.top_candidates[0].label, "stone")
 
             manifest = intervention_trace_manifest(
                 dataset_path=dataset_path,
@@ -366,7 +371,7 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             demo_dir = Path(episode["report_dir"])
             step_json = demo_dir / "step_000.json"
             step_md = demo_dir / "step_000.md"
-            patch_png = demo_dir / "step_000_patch_occlusion.png"
+            patch_png = demo_dir / "step_000_intervention_panel.png"
             self.assertTrue(step_json.is_file())
             self.assertTrue(step_md.is_file())
             self.assertTrue(patch_png.is_file())
@@ -374,6 +379,9 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             payload = json.loads(step_json.read_text())
             self.assertTrue(payload["counterfactual_success"])
             self.assertEqual(payload["patch_occlusion"]["top_candidates"][0]["label"], "patch (0, 0)")
+            self.assertEqual(payload["text_masking"]["top_candidates"][0]["label"], "stone")
+            self.assertIn("masked_query", payload["text_masking"]["top_candidates"][0])
+            self.assertIn("Original query:", step_md.read_text())
             self.assertEqual(payload["counterfactual_edits"][1]["predicted_token_ids"], [41, 42, 43])
 
     def test_collect_and_roundtrip_causal_trace(self) -> None:

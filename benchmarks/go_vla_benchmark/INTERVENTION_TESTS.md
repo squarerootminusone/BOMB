@@ -27,7 +27,7 @@ Report export writes:
 
 - one folder per demo
 - one JSON and one Markdown file per step
-- one intervention-panel PNG per step when patch occlusion or text masking is enabled
+- one intervention-panel PNG per step when patch occlusion is enabled
 
 ## Run Collection
 
@@ -111,12 +111,14 @@ for each RLDS-selected frame:
 ```text
 for each RLDS-selected frame:
     run clean OpenVLA decoding once
-    find the instruction-token positions inside the prompt
-    for each instruction token:
-        zero its attention-mask entry while keeping the rest of the prompt fixed
+    build word / phrase masking candidates from the instruction text
+    always include meaningful spans such as colors, "stone", "column", and
+    coordinate phrases like "(4, 4)" alongside the individual number words
+    for each candidate span:
+        zero the attention-mask entries for all prompt tokens covered by that span
         teacher-force the baseline target tokens with that masked prompt
         measure log-prob drop relative to the clean target-token probabilities
-    rank masked tokens by log-prob drop
+    rank masked spans by log-prob drop
     re-decode the top-k masked variants and store their predicted tokens/actions
 ```
 
