@@ -42,3 +42,6 @@ Key flags: `--num-demos` (number of source demos), `--camera-size` (image resolu
 - **`sim.render()` returns bottom-to-top (OpenGL convention)** and is flipped with `[::-1]`. Any world-to-pixel projection must use `(height - 1) * 0.5` (not `height * 0.5`) as the principal point to account for the flip's off-by-one.
 - **Robosuite scene cameras**: `agentview` (default), `birdview` (top-down), `frontview`, `sideview`, `robot0_eye_in_hand`. Use `sim.render(camera_name=...)` to switch.
 - **Visual vs collision geoms share the same `pos`/`quat`** — they are co-located. Grid lines are painted via texture on the visual geom, not via the invisible `go_line_*` geoms (which exist only for broadphase stability).
+
+## Remote Training Setup
+See [openvla-oft/SETUP_REMOTE.md](openvla-oft/SETUP_REMOTE.md) for vast.ai setup instructions.

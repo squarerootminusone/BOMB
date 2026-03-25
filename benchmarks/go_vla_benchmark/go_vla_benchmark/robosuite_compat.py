@@ -110,8 +110,19 @@ def _install_fallback_robosuite() -> None:
 
 
 def ensure_robosuite_compat() -> None:
-    """Install fallback module only when robosuite is unavailable."""
+    """Install fallback module only when robosuite is unavailable.
+
+    Also pins MUJOCO_GL before robosuite's binding_utils can override it
+    with 'cgl' on macOS (which dm_control rejects in spawned processes).
+    """
+    import os
+    _gl = os.environ.get("MUJOCO_GL", "")
     try:
         import robosuite  # noqa: F401
     except Exception:
         _install_fallback_robosuite()
+    # Restore MUJOCO_GL if robosuite's binding_utils overwrote it
+    if _gl:
+        os.environ["MUJOCO_GL"] = _gl
+    elif os.environ.get("MUJOCO_GL") == "cgl":
+        os.environ["MUJOCO_GL"] = "glfw"

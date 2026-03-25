@@ -48,8 +48,6 @@ def _episode_from_generated(generated: Dict[str, object]) -> EpisodeRecord:
 
 def _generate_worker(config: dict) -> dict:
     """Worker function for parallel MimicGen generation (must be top-level for pickle)."""
-    import os
-    os.environ["MUJOCO_GL"] = "glfw"
     worker_id = config["worker_id"]
     task_spec, _, raw_cfg = load_task_config(config["task_config_path"])
 
