@@ -1,5 +1,8 @@
 # Intervention Tests
 
+Basic implementation of the fundaments from: https://www.alphaxiv.org/abs/2509.22496
+The interventions are done offline using recorded frames from a .hdf5 file.
+
 This has nothing to do with the interanal weight of hte model/attention maps. It reruns the model with an intervention (text of image patch) and sees how the original(correct) action likelihoods change.
 
 This stage extends the existing local-explanation pipeline with counterfactual

@@ -125,7 +125,7 @@ conda run --no-capture-output -n main   python benchmarks/go_vla_benchmark/scrip
 ```
 
 ```bash
- python viewer_video.py   --data-dir /root/tensorflow_datasets   --start-episode 0   --num-episodes 5   --output /root/dsait4125/all_episodes.mp4
+ python viewer_video.py   --data-dir /root/tensorflow_datasets   --start-episode 0   --num-episodes 5   --output /root/dsait4125/benchmarks/go_vla_benchmark/data/all_episodes.mp4
 ```
 
 Other installs

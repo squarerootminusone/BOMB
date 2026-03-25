@@ -38,68 +38,83 @@ Report export writes:
 Use the strongest patch occlusion per step as the corrupted input:
 
 ```bash
-python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py \
-  --dataset benchmarks/go_vla_benchmark/data/source_go.hdf5 \
-  --checkpoint /abs/path/to/openvla-checkpoint \
-  --trace-output benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.npz \
-  --summary-output benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.json \
+conda run --no-capture-output -n main \
+  python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py \
+  --dataset /root/dsait4125/benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+  --checkpoint /root/16-18-14/checkpoints/best-merged \
+  --trace-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.npz \
+  --summary-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.json \
   --num-demos 4 \
   --stride 4 \
   --device cuda:0 \
   --corruption-type patch-occlusion \
   --attn-implementation eager
+
+python benchmarks/go_vla_benchmark/scripts/export_openvla_causal_localization_report.py \
+  --trace-input benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.npz \
+  --output-dir benchmarks/go_vla_benchmark/data/causal/report_patch
 ```
 
 Use the strongest text mask per step instead:
 
 ```bash
-python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py \
-  --dataset benchmarks/go_vla_benchmark/data/source_go.hdf5 \
-  --checkpoint /abs/path/to/openvla-checkpoint \
-  --trace-output benchmarks/go_vla_benchmark/data/causal/source_go_text_causal.npz \
+conda run --no-capture-output -n main \
+  python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py \
+  --dataset /root/dsait4125/benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+  --checkpoint /root/16-18-14/checkpoints/best-merged \
+  --trace-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_text_causal.npz \
+  --summary-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_text_causal.json \
   --num-demos 4 \
   --stride 4 \
   --device cuda:0 \
   --corruption-type text-masking \
   --attn-implementation eager
+
+python benchmarks/go_vla_benchmark/scripts/export_openvla_causal_localization_report.py \
+  --trace-input benchmarks/go_vla_benchmark/data/causal/source_go_text_causal.npz \
+  --output-dir benchmarks/go_vla_benchmark/data/causal/report_text
 ```
 
 Pin a specific corrupted patch or token index:
 
 ```bash
-python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py \
-  --dataset benchmarks/go_vla_benchmark/data/source_go.hdf5 \
-  --checkpoint /abs/path/to/openvla-checkpoint \
-  --trace-output benchmarks/go_vla_benchmark/data/causal/manual_index.npz \
+conda run --no-capture-output -n main \
+  python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py \
+  --dataset /root/dsait4125/benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+  --checkpoint /root/16-18-14/checkpoints/best-merged \
+  --trace-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_manual_index.npz \
+  --summary-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_manual_index.json \
   --corruption-type patch-occlusion \
   --corruption-index 0 \
   --num-demos 1 \
   --max-steps 1 \
   --device cuda:0 \
   --attn-implementation eager
+
+python benchmarks/go_vla_benchmark/scripts/export_openvla_causal_localization_report.py \
+  --trace-input benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_manual_index.npz \
+  --output-dir benchmarks/go_vla_benchmark/data/causal/report_manual_index
 ```
 
 Also patch cross-attention-style blocks when the checkpoint exposes them:
 
 ```bash
-python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py \
-  --dataset benchmarks/go_vla_benchmark/data/source_go.hdf5 \
-  --checkpoint /abs/path/to/openvla-checkpoint \
-  --trace-output benchmarks/go_vla_benchmark/data/causal/with_cross_blocks.npz \
+conda run --no-capture-output -n main \
+  python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py \
+  --dataset /root/dsait4125/benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+  --checkpoint /root/16-18-14/checkpoints/best-merged \
+  --trace-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_cross_blocks.npz \
+  --summary-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_cross_blocks.json \
   --corruption-type patch-occlusion \
   --per-cross-attention \
   --num-demos 1 \
   --max-steps 1 \
   --device cuda:0 \
   --attn-implementation eager
-```
 
-## Export Report
-
-```bash
 python benchmarks/go_vla_benchmark/scripts/export_openvla_causal_localization_report.py \
-  --trace-input benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.npz \
-  --output-dir benchmarks/go_vla_benchmark/data/causal/report
+  --trace-input benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_cross_blocks.npz \
+  --output-dir benchmarks/go_vla_benchmark/data/causal/report_cross_blocks
 ```
 
 ## Main Algorithms
