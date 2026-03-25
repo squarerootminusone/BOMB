@@ -21,6 +21,8 @@ PANEL_BORDER = (211, 218, 230)
 TEXT_PRIMARY = (24, 32, 45)
 TEXT_MUTED = (95, 108, 126)
 ACCENT = (50, 102, 184)
+GRID_LINE = (0, 0, 0)
+GRID_LINE_WIDTH = 2
 OPENVLA_ACTION_VOCAB_SIZE = 32000
 OPENVLA_ACTION_BINS = 256
 OPENVLA_BIN_CENTERS = ((np.linspace(-1.0, 1.0, OPENVLA_ACTION_BINS)[:-1] + np.linspace(-1.0, 1.0, OPENVLA_ACTION_BINS)[1:]) / 2.0).astype(np.float32)
@@ -126,6 +128,83 @@ def _visualization_metadata(comparison_scope: Optional[str], scale_peak: Optiona
     if scale_peak is not None:
         metadata["scale_peak"] = float(scale_peak)
     return metadata
+
+
+def _patch_bounds(length: int, grid_side: int) -> List[int]:
+    if grid_side <= 0:
+        return [0, int(length)]
+    return [int(round((index / grid_side) * length)) for index in range(grid_side + 1)]
+
+
+def _label_font_for_grid(frame_h: int, frame_w: int, grid_side: int) -> ImageFont.ImageFont:
+    if grid_side <= 0:
+        return _load_font(10)
+    cell_h = max(1, frame_h // grid_side)
+    cell_w = max(1, frame_w // grid_side)
+    font_size = max(8, min(14, min(cell_h, cell_w) - 2))
+    return _load_font(font_size)
+
+
+def _text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> tuple[int, int]:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+
+def _draw_patch_grid(
+    draw: ImageDraw.ImageDraw,
+    left: int,
+    top: int,
+    width: int,
+    height: int,
+    grid_side: int,
+) -> None:
+    x_bounds = _patch_bounds(width, grid_side)
+    y_bounds = _patch_bounds(height, grid_side)
+    cell_w = max(1, min((x1 - x0) for x0, x1 in zip(x_bounds[:-1], x_bounds[1:])))
+    cell_h = max(1, min((y1 - y0) for y0, y1 in zip(y_bounds[:-1], y_bounds[1:])))
+    line_width = min(GRID_LINE_WIDTH, max(1, min(cell_w, cell_h) - 1))
+    for x in x_bounds[1:-1]:
+        x_pos = left + int(x)
+        draw.line([(x_pos, top), (x_pos, top + height - 1)], fill=GRID_LINE, width=line_width)
+    for y in y_bounds[1:-1]:
+        y_pos = top + int(y)
+        draw.line([(left, y_pos), (left + width - 1, y_pos)], fill=GRID_LINE, width=line_width)
+
+
+def _draw_patch_column_labels(
+    draw: ImageDraw.ImageDraw,
+    left: int,
+    width: int,
+    grid_side: int,
+    font: ImageFont.ImageFont,
+    label_y: int,
+) -> None:
+    x_bounds = _patch_bounds(width, grid_side)
+    for col in range(max(0, grid_side)):
+        x0 = x_bounds[col]
+        x1 = x_bounds[col + 1]
+        cx = left + ((x0 + x1) / 2.0)
+        label = str(col)
+        text_w, _text_h = _text_size(draw, label, font=font)
+        draw.text((cx - (text_w / 2.0), label_y), label, fill=TEXT_PRIMARY, font=font)
+
+
+def _draw_patch_row_labels(
+    draw: ImageDraw.ImageDraw,
+    top: int,
+    height: int,
+    grid_side: int,
+    font: ImageFont.ImageFont,
+    label_x: int,
+) -> None:
+    y_bounds = _patch_bounds(height, grid_side)
+    for row in range(max(0, grid_side)):
+        y0 = y_bounds[row]
+        y1 = y_bounds[row + 1]
+        cy = top + ((y0 + y1) / 2.0)
+        label = str(row)
+        text_w, text_h = _text_size(draw, label, font=font)
+        draw.text((label_x - text_w, cy - (text_h / 2.0)), label, fill=TEXT_PRIMARY, font=font)
 
 
 def _sanitize_filename(name: str) -> str:
@@ -341,15 +420,60 @@ def _render_intervention_panel(
 
     frame = clip.images[step_idx]
     frame_h, frame_w = frame.shape[:2]
+    heat_grid = np.asarray(step.patch_occlusion.effect_map, dtype=np.float32)
+    grid_side = int(heat_grid.shape[0]) if heat_grid.ndim == 2 and heat_grid.shape[0] == heat_grid.shape[1] else 0
+    label_font = _label_font_for_grid(frame_h=frame_h, frame_w=frame_w, grid_side=grid_side)
+    probe_canvas = Image.new("RGB", (1, 1), BG_COLOR)
+    probe_draw = ImageDraw.Draw(probe_canvas)
+    row_label_width = 0
+    if grid_side > 0:
+        row_label_width = max(_text_size(probe_draw, str(grid_side - 1), font=label_font)[0], 8)
+    row_label_gap = 8 if row_label_width > 0 else 0
+    row_label_gutter = row_label_width + row_label_gap
+    column_label_height = _text_size(probe_draw, str(max(0, grid_side - 1)), font=label_font)[1] if grid_side > 0 else 0
+    column_label_gap = 8 if column_label_height > 0 else 0
     frame_gap = 12
     margin = 12
-    canvas_w = (2 * frame_w) + frame_gap + (2 * margin)
-    canvas_h = frame_h + (2 * margin)
+    canvas_w = (2 * frame_w) + frame_gap + (2 * margin) + row_label_gutter
+    canvas_h = frame_h + (2 * margin) + column_label_gap + column_label_height
     canvas = Image.new("RGB", (canvas_w, canvas_h), BG_COLOR)
-    heat_grid = np.asarray(step.patch_occlusion.effect_map, dtype=np.float32)
-    canvas.paste(Image.fromarray(frame), (margin, margin))
+    left_image_x = margin
+    right_image_x = margin + frame_w + frame_gap
+    image_y = margin
+    canvas.paste(Image.fromarray(frame), (left_image_x, image_y))
     overlay = _overlay(frame, heat_grid) if scale_peak is None else _signed_overlay(frame, heat_grid, scale_peak=scale_peak)
-    canvas.paste(Image.fromarray(overlay), (margin + frame_w + frame_gap, margin))
+    canvas.paste(Image.fromarray(overlay), (right_image_x, image_y))
+
+    draw = ImageDraw.Draw(canvas)
+    if grid_side > 0:
+        _draw_patch_grid(draw, left=left_image_x, top=image_y, width=frame_w, height=frame_h, grid_side=grid_side)
+        _draw_patch_grid(draw, left=right_image_x, top=image_y, width=frame_w, height=frame_h, grid_side=grid_side)
+
+        label_y = image_y + frame_h + column_label_gap
+        _draw_patch_column_labels(
+            draw,
+            left=left_image_x,
+            width=frame_w,
+            grid_side=grid_side,
+            font=label_font,
+            label_y=label_y,
+        )
+        _draw_patch_column_labels(
+            draw,
+            left=right_image_x,
+            width=frame_w,
+            grid_side=grid_side,
+            font=label_font,
+            label_y=label_y,
+        )
+        _draw_patch_row_labels(
+            draw,
+            top=image_y,
+            height=frame_h,
+            grid_side=grid_side,
+            font=label_font,
+            label_x=right_image_x + frame_w + row_label_gutter,
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path)
