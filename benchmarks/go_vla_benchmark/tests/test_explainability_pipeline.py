@@ -8,6 +8,7 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+from PIL import Image
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -182,6 +183,43 @@ class _FakeInterventionAdapter(_FakeModelAdapter):
                 ),
             ],
             True,
+        )
+
+
+class _FakeSignedInterventionAdapter(_FakeInterventionAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self._patch_call_idx = 0
+
+    def patch_occlusion(
+        self,
+        image: np.ndarray,
+        instruction: str,
+        baseline_step: LocalExplanationStep,
+        top_k: int,
+    ) -> InterventionScan:
+        del image, instruction, baseline_step, top_k
+        effect_maps = [
+            np.asarray([[2.0, -1.0], [0.0, 0.5]], dtype=np.float32),
+            np.asarray([[4.0, -2.0], [0.0, 1.0]], dtype=np.float32),
+        ]
+        effect_map = effect_maps[min(self._patch_call_idx, len(effect_maps) - 1)]
+        self._patch_call_idx += 1
+        return InterventionScan(
+            effect_map=effect_map,
+            top_candidates=[
+                InterventionCandidateEffect(
+                    index=0,
+                    label="patch (0, 0)",
+                    score=float(effect_map[0, 0]),
+                    pred_action_xyzg=np.asarray([0.5, 0.1, -0.2, -1.0], dtype=np.float32),
+                    raw_pred_action=np.asarray([0.5, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
+                    target_token_ids=np.asarray([21, 22, 23], dtype=np.int64),
+                    target_token_probs=np.asarray([0.7, 0.6, 0.4], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([201, 202, 203], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.5, 0.1, 0.9], dtype=np.float32),
+                )
+            ],
         )
 
 
@@ -403,6 +441,61 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 [-0.5, 0.10000000149011612, 0.8999999761581421],
             )
             self.assertIn("predicted_bin_centers", step_md.read_text())
+
+    def test_export_intervention_report_cross_step_comparison(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            dataset_path = tmp_path / "source_go.hdf5"
+            report_dir = tmp_path / "intervention_report"
+            self._write_dataset(dataset_path)
+
+            clips = GoHDF5DatasetAdapter().load_episode_clips(
+                dataset_path=dataset_path,
+                demos=None,
+                start=0,
+                num_demos=0,
+                stride=1,
+                max_steps=0,
+            )
+            clips[0].images[:] = 20
+            traces = collect_episode_intervention_traces(clips=clips, model_adapter=_FakeSignedInterventionAdapter())
+            manifest = export_intervention_report(
+                output_dir=report_dir,
+                clips=clips,
+                traces=traces,
+                cross_step_comparison="episode",
+            )
+
+            episode = manifest["episodes"][0]
+            self.assertEqual(manifest["patch_occlusion_visualization"]["mode"], "cross-step")
+            self.assertEqual(episode["patch_occlusion_visualization"]["scope"], "episode")
+            self.assertAlmostEqual(float(episode["patch_occlusion_visualization"]["scale_peak"]), 4.0)
+
+            demo_dir = Path(episode["report_dir"])
+            step_payload = json.loads((demo_dir / "step_000.json").read_text())
+            self.assertEqual(step_payload["patch_occlusion_visualization"]["mode"], "cross-step")
+            self.assertAlmostEqual(float(step_payload["patch_occlusion_visualization"]["scale_peak"]), 4.0)
+
+            step0_panel = np.asarray(Image.open(demo_dir / "step_000_intervention_panel.png"))
+            step1_panel = np.asarray(Image.open(demo_dir / "step_001_intervention_panel.png"))
+
+            left_x = 12
+            right_x = 28
+            top_y = 12
+            bottom_y = 15
+
+            step0_positive_delta = np.abs(step0_panel[top_y, right_x].astype(np.int16) - step0_panel[top_y, left_x].astype(np.int16)).sum()
+            step1_positive_delta = np.abs(step1_panel[top_y, right_x].astype(np.int16) - step1_panel[top_y, left_x].astype(np.int16)).sum()
+            self.assertLess(int(step0_positive_delta), int(step1_positive_delta))
+
+            positive_pixel = step0_panel[top_y, right_x].astype(np.int16)
+            negative_pixel = step0_panel[top_y, right_x + 3].astype(np.int16)
+            zero_overlay = step0_panel[bottom_y, right_x].astype(np.int16)
+            zero_original = step0_panel[bottom_y, left_x].astype(np.int16)
+
+            self.assertGreater(int(positive_pixel[0]), int(positive_pixel[2]))
+            self.assertGreater(int(negative_pixel[2]), int(negative_pixel[0]))
+            np.testing.assert_array_equal(zero_overlay, zero_original)
 
     def test_collect_and_roundtrip_causal_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

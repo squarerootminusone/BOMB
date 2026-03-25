@@ -49,6 +49,14 @@ def _clip_grid(grid: np.ndarray, eps: float = 1e-8) -> np.ndarray:
     return grid / peak
 
 
+def _normalize_signed_grid(grid: np.ndarray, peak: Optional[float] = None, eps: float = 1e-8) -> tuple[np.ndarray, float]:
+    grid = np.nan_to_num(np.asarray(grid, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    resolved_peak = float(np.max(np.abs(grid))) if peak is None and grid.size else float(peak or 0.0)
+    if resolved_peak <= eps:
+        return np.zeros_like(grid), 0.0
+    return np.clip(grid / resolved_peak, -1.0, 1.0), resolved_peak
+
+
 def _apply_colormap(values: np.ndarray) -> np.ndarray:
     values = np.clip(values.astype(np.float32), 0.0, 1.0)
     r = np.clip(1.8 * values - 0.55, 0.0, 1.0)
@@ -57,9 +65,25 @@ def _apply_colormap(values: np.ndarray) -> np.ndarray:
     return (np.stack([r, g, b], axis=-1) * 255.0).astype(np.uint8)
 
 
+def _apply_diverging_colormap(values: np.ndarray) -> np.ndarray:
+    values = np.clip(values.astype(np.float32), -1.0, 1.0)
+    magnitude = np.abs(values)[..., None]
+    neutral = np.ones(values.shape + (3,), dtype=np.float32)
+    positive = np.asarray([0.82, 0.21, 0.19], dtype=np.float32)
+    negative = np.asarray([0.18, 0.40, 0.80], dtype=np.float32)
+    targets = np.where(values[..., None] >= 0.0, positive, negative)
+    colors = neutral + ((targets - neutral) * magnitude)
+    return (np.clip(colors, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+
 def _resize_grid_to_frame(grid: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
     image = Image.fromarray((np.clip(grid, 0.0, 1.0) * 255.0).astype(np.uint8), mode="L")
     return np.asarray(image.resize((target_w, target_h), resample=Image.Resampling.BILINEAR), dtype=np.uint8)
+
+
+def _resize_signed_grid_to_frame(grid: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
+    image = Image.fromarray(np.asarray(grid, dtype=np.float32), mode="F")
+    return np.asarray(image.resize((target_w, target_h), resample=Image.Resampling.BILINEAR), dtype=np.float32)
 
 
 def _overlay(frame: np.ndarray, heat_grid: np.ndarray, alpha: float = 0.58) -> np.ndarray:
@@ -67,6 +91,41 @@ def _overlay(frame: np.ndarray, heat_grid: np.ndarray, alpha: float = 0.58) -> n
     heat_rgb = _apply_colormap(heat.astype(np.float32) / 255.0)
     mixed = (frame.astype(np.float32) * (1.0 - alpha)) + (heat_rgb.astype(np.float32) * alpha)
     return np.clip(mixed, 0.0, 255.0).astype(np.uint8)
+
+
+def _signed_overlay(frame: np.ndarray, heat_grid: np.ndarray, scale_peak: float, alpha: float = 0.58) -> np.ndarray:
+    signed_grid, _ = _normalize_signed_grid(heat_grid, peak=scale_peak)
+    heat = np.clip(_resize_signed_grid_to_frame(signed_grid, frame.shape[0], frame.shape[1]), -1.0, 1.0)
+    heat_rgb = _apply_diverging_colormap(heat)
+    alpha_map = np.abs(heat)[..., None] * float(alpha)
+    mixed = (frame.astype(np.float32) * (1.0 - alpha_map)) + (heat_rgb.astype(np.float32) * alpha_map)
+    return np.clip(mixed, 0.0, 255.0).astype(np.uint8)
+
+
+def _effect_map_scale_peak(effect_map: np.ndarray) -> float:
+    values = np.nan_to_num(np.asarray(effect_map, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    return float(np.max(np.abs(values))) if values.size else 0.0
+
+
+def _trace_scale_peak(trace: EpisodeInterventionTrace) -> float:
+    peaks = [
+        _effect_map_scale_peak(step.patch_occlusion.effect_map)
+        for step in trace.steps
+        if step.patch_occlusion is not None
+    ]
+    return max(peaks, default=0.0)
+
+
+def _visualization_metadata(comparison_scope: Optional[str], scale_peak: Optional[float]) -> Dict[str, object]:
+    if comparison_scope is None:
+        return {"mode": "per-step"}
+    metadata: Dict[str, object] = {
+        "mode": "cross-step",
+        "scope": comparison_scope,
+    }
+    if scale_peak is not None:
+        metadata["scale_peak"] = float(scale_peak)
+    return metadata
 
 
 def _sanitize_filename(name: str) -> str:
@@ -275,6 +334,7 @@ def _render_intervention_panel(
     step: InterventionStepTrace,
     step_idx: int,
     output_path: Path,
+    scale_peak: Optional[float] = None,
 ) -> None:
     if step.patch_occlusion is None:
         return
@@ -288,7 +348,8 @@ def _render_intervention_panel(
     canvas = Image.new("RGB", (canvas_w, canvas_h), BG_COLOR)
     heat_grid = np.asarray(step.patch_occlusion.effect_map, dtype=np.float32)
     canvas.paste(Image.fromarray(frame), (margin, margin))
-    canvas.paste(Image.fromarray(_overlay(frame, heat_grid)), (margin + frame_w + frame_gap, margin))
+    overlay = _overlay(frame, heat_grid) if scale_peak is None else _signed_overlay(frame, heat_grid, scale_peak=scale_peak)
+    canvas.paste(Image.fromarray(overlay), (margin + frame_w + frame_gap, margin))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path)
@@ -300,6 +361,7 @@ def _step_payload(
     step: InterventionStepTrace,
     step_idx: int,
     panel_name: Optional[str],
+    visualization_metadata: Dict[str, object],
 ) -> Dict[str, object]:
     baseline_bin_indices, baseline_bin_centers = _resolve_action_bins(
         token_ids=step.baseline_target_token_ids,
@@ -395,6 +457,7 @@ def _step_payload(
                 for item in _text_mask_candidates(step, limit=None)
             ],
         },
+        "patch_occlusion_visualization": dict(visualization_metadata),
         "counterfactual_success": bool(step.counterfactual_success),
         "counterfactual_edits": counterfactual_rows,
         "artifacts": {
@@ -539,9 +602,18 @@ def export_intervention_report(
     clips: Sequence[EpisodeClip],
     traces: Sequence[EpisodeInterventionTrace],
     manifest_path: Optional[Path] = None,
+    cross_step_comparison: Optional[str] = None,
 ) -> Dict[str, object]:
+    if cross_step_comparison not in (None, "episode", "report"):
+        raise ValueError(f"unsupported cross_step_comparison: {cross_step_comparison}")
+
     output_dir.mkdir(parents=True, exist_ok=True)
     clip_by_key = {clip.demo_key: clip for clip in clips}
+    report_scale_peak = (
+        max((_trace_scale_peak(trace) for trace in traces), default=0.0)
+        if cross_step_comparison == "report"
+        else None
+    )
 
     manifest_items = []
     root_lines = [
@@ -555,6 +627,8 @@ def export_intervention_report(
         clip = clip_by_key[trace.demo_key]
         demo_dir = output_dir / _sanitize_filename(trace.demo_key)
         demo_dir.mkdir(parents=True, exist_ok=True)
+        demo_scale_peak = report_scale_peak if cross_step_comparison == "report" else _trace_scale_peak(trace) if cross_step_comparison == "episode" else None
+        demo_visualization = _visualization_metadata(cross_step_comparison, demo_scale_peak)
 
         step_items = []
         demo_lines = [
@@ -578,6 +652,7 @@ def export_intervention_report(
                     step=step,
                     step_idx=step_idx,
                     output_path=demo_dir / panel_name,
+                    scale_peak=demo_scale_peak,
                 )
 
             payload = _step_payload(
@@ -586,6 +661,7 @@ def export_intervention_report(
                 step=step,
                 step_idx=step_idx,
                 panel_name=panel_name,
+                visualization_metadata=demo_visualization,
             )
             json_path = demo_dir / f"{step_name}.json"
             md_path = demo_dir / f"{step_name}.md"
@@ -612,6 +688,7 @@ def export_intervention_report(
             "mean_l1": float(trace.mean_l1),
             "max_l1": float(trace.max_l1),
             "num_steps": int(len(trace.steps)),
+            "patch_occlusion_visualization": dict(demo_visualization),
             "steps": step_items,
         }
         summary_path = demo_dir / "summary.json"
@@ -627,6 +704,7 @@ def export_intervention_report(
                 "mean_l1": float(trace.mean_l1),
                 "max_l1": float(trace.max_l1),
                 "num_steps": int(len(trace.steps)),
+                "patch_occlusion_visualization": dict(demo_visualization),
                 "report_dir": str(demo_dir),
                 "summary_path": str(summary_path),
                 "readme_path": str(readme_path),
@@ -636,7 +714,11 @@ def export_intervention_report(
             f"| {trace.demo_key} | {trace.score:.4f} | {trace.mean_l1:.4f} | [{readme_path.parent.name}/README.md]({readme_path.parent.name}/README.md) |"
         )
 
-    manifest = {"output_dir": str(output_dir), "episodes": manifest_items}
+    manifest = {
+        "output_dir": str(output_dir),
+        "patch_occlusion_visualization": _visualization_metadata(cross_step_comparison, report_scale_peak),
+        "episodes": manifest_items,
+    }
     readme_path = output_dir / "README.md"
     readme_path.write_text("\n".join(root_lines))
     manifest["readme_path"] = str(readme_path)

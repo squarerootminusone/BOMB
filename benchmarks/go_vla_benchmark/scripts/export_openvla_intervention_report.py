@@ -36,6 +36,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--demos", type=str, default=None, help="optional comma-separated demo keys")
     parser.add_argument("--top-k", type=int, default=0, help="optional failure-ranked demo limit; <= 0 means all selected demos")
     parser.add_argument("--manifest-output", type=str, default=None, help="optional JSON manifest path")
+    parser.add_argument(
+        "--cross-step-comparison",
+        nargs="?",
+        const="episode",
+        choices=("episode", "report"),
+        default=None,
+        metavar="SCOPE",
+        help="use signed patch-occlusion overlays with a shared max-abs scale; defaults to per-episode, or pass 'report' for one scale across all exported demos",
+    )
     return parser.parse_args()
 
 
@@ -99,6 +108,7 @@ def main() -> None:
         clips=adjusted_clips,
         traces=selected_traces,
         manifest_path=manifest_path,
+        cross_step_comparison=args.cross_step_comparison,
     )
     print(json.dumps(manifest, indent=2))
 

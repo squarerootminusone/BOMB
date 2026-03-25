@@ -1,15 +1,13 @@
 # Intervention Tests
 
+This has nothing to do with the interanal weight of hte model/attention maps. It reruns the model with an intervention (text of image patch) and sees how the original(correct) action likelihoods change.
+
 This stage extends the existing local-explanation pipeline with counterfactual
 input perturbations over the same RLDS-aligned clips:
 
 - patch occlusion
 - text masking
 - minimal counterfactual edits
-
-It reuses the same Go HDF5 loader, RLDS-style frame selection, prompt builder,
-and OpenVLA action decoding already used in stage 1.
-
 ## Inputs
 
 - an HDF5 Go dataset loaded through the existing RLDS-style clip adapter
@@ -30,6 +28,9 @@ Report export writes:
 - one intervention-panel PNG per step when patch occlusion is enabled
 
 ## Run Collection
+
+**For the reports, you can use --cross-step-comparison to get normalisation over all of the steps, rather than stepwise**
+
 
 Run all three intervention families:
 
@@ -93,6 +94,26 @@ python benchmarks/go_vla_benchmark/scripts/export_openvla_intervention_report.py
 ```
 
 ## Main Algorithms
+the intuition would be: 
+effect(patch j) = baseline_logprob - occluded_logprob_j
+
+
+
+In more detail, for the probabilities, this is how we dod it
+1. Greedy decoded-token probabilities
+   p_t = P(y_t | image, prompt, previous decoded tokens)
+   where y_t is the token chosen by argmax at step t
+
+2. Teacher-forced reference-sequence probabilities
+   p_t^ref = P(y_t^clean | modified image/prompt, previous clean tokens)
+   where y_t^clean is the token from the original clean baseline decode
+
+So we're just lookingfor any action changes under the modified output.
+
+
+For the .png outputs: left = raw frame, right = the same frame with the patch effect map resized to image size, bilinearly interpolated (due to the 16x16 patches the Prismatic7B model uses 224x224 pixel images where each patch is 14x14 pixels), colorized, and alpha-blended
+For the text masking we just set the attention_mask = 0 during inference for those specific tokens
+
 
 ### Patch Occlusion
 
