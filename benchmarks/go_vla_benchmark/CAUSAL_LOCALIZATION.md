@@ -45,6 +45,7 @@ python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.p
   --summary-output benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.json \
   --num-demos 4 \
   --stride 4 \
+  --device cuda:0 \
   --corruption-type patch-occlusion \
   --attn-implementation eager
 ```
@@ -58,6 +59,7 @@ python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.p
   --trace-output benchmarks/go_vla_benchmark/data/causal/source_go_text_causal.npz \
   --num-demos 4 \
   --stride 4 \
+  --device cuda:0 \
   --corruption-type text-masking \
   --attn-implementation eager
 ```
@@ -73,6 +75,7 @@ python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.p
   --corruption-index 0 \
   --num-demos 1 \
   --max-steps 1 \
+  --device cuda:0 \
   --attn-implementation eager
 ```
 
@@ -87,6 +90,7 @@ python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.p
   --per-cross-attention \
   --num-demos 1 \
   --max-steps 1 \
+  --device cuda:0 \
   --attn-implementation eager
 ```
 
@@ -143,10 +147,12 @@ if none are present:
 
 ## Notes
 
+- The collection script now prints a startup JSON block to `stderr` with the
+  requested device, resolved device, and first model-parameter device. On a GPU
+  run these should all report `cuda:0`.
 - OpenVLA is typically a decoder-only VLM, so the most important localization
   signal usually comes from decoder layers and self-attention heads.
 - `--per-cross-attention` is optional by design because some checkpoints will
   not expose separate cross-attention blocks.
 - The stored score is a normalized restoration ratio:
   `(patched - corrupted) / (clean - corrupted)` on target-token log-probability.
-

@@ -44,6 +44,7 @@ conda run --no-capture-output -n main \
   --stride 4 \
   --top-k 8 \
   --max-counterfactual-edits 4 \
+  --device cuda:0 \
   --attn-implementation eager
 
 python benchmarks/go_vla_benchmark/scripts/export_openvla_intervention_report.py \
@@ -63,6 +64,7 @@ conda run --no-capture-output -n main \
   --runs patch-occlusion \
   --num-demos 5 \
   --stride 4 \
+  --device cuda:0 \
   --attn-implementation eager
 
 python benchmarks/go_vla_benchmark/scripts/export_openvla_intervention_report.py \
@@ -82,6 +84,7 @@ conda run --no-capture-output -n main \
   --runs text-masking \
   --num-demos 5 \
   --stride 4 \
+  --device cuda:0 \
   --attn-implementation eager
 
 python benchmarks/go_vla_benchmark/scripts/export_openvla_intervention_report.py \
@@ -139,6 +142,9 @@ for each RLDS-selected frame:
 
 ## Notes
 
+- The collection script now prints a startup JSON block to `stderr` with the
+  requested device, resolved device, and first model-parameter device. On a GPU
+  run these should all report `cuda:0`.
 - The counterfactual search is a greedy approximation to a minimal edit set. It
   is intentionally transparent: every cumulative edit is stored in the trace.
 - `--runs` lets you execute only the expensive part you need.

@@ -49,6 +49,8 @@ class _DecodedSequence:
     raw_pred_action: np.ndarray
     target_token_ids: np.ndarray
     target_token_probs: np.ndarray
+    target_token_bin_indices: np.ndarray
+    target_token_bin_centers: np.ndarray
     prompt_context: _PromptContext
     num_patches: int
     patch_token_attributions: Optional[np.ndarray] = None
@@ -105,16 +107,21 @@ def _infer_prompt_style(explicit: Optional[str], checkpoint: str) -> str:
     return "openvla-v01" if "openvla-v01" in checkpoint.lower() else "openvla"
 
 
-def _decode_action_tokens(model, token_ids: np.ndarray, action_dim: int, unnorm_key: Optional[str]) -> np.ndarray:
+def _decode_action_tokens(
+    model,
+    token_ids: np.ndarray,
+    action_dim: int,
+    unnorm_key: Optional[str],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     predicted_action_token_ids = np.asarray(token_ids[-action_dim:], dtype=np.int64)
-    discretized_actions = model.vocab_size - predicted_action_token_ids
-    discretized_actions = np.clip(discretized_actions - 1, a_min=0, a_max=model.bin_centers.shape[0] - 1)
-    normalized_actions = model.bin_centers[discretized_actions]
+    bin_indices = model.vocab_size - predicted_action_token_ids
+    bin_indices = np.clip(bin_indices - 1, a_min=0, a_max=model.bin_centers.shape[0] - 1).astype(np.int64)
+    normalized_actions = np.asarray(model.bin_centers[bin_indices], dtype=np.float32)
 
     try:
         action_norm_stats = model.get_action_stats(unnorm_key)
     except Exception:
-        return normalized_actions.astype(np.float32)
+        return normalized_actions.astype(np.float32), bin_indices, normalized_actions
 
     mask = action_norm_stats.get("mask", np.ones_like(action_norm_stats["q01"], dtype=bool))
     action_high = np.asarray(action_norm_stats["q99"], dtype=np.float32)
@@ -124,7 +131,7 @@ def _decode_action_tokens(model, token_ids: np.ndarray, action_dim: int, unnorm_
         0.5 * (normalized_actions + 1.0) * (action_high - action_low) + action_low,
         normalized_actions,
     )
-    return np.asarray(actions, dtype=np.float32)
+    return np.asarray(actions, dtype=np.float32), bin_indices, normalized_actions
 
 
 def _fit_attention_grid(vector: np.ndarray) -> np.ndarray:
@@ -483,7 +490,7 @@ class OpenVLAExplainabilityAdapter:
 
             past_key_values = outputs.past_key_values
 
-        raw_pred_action = _decode_action_tokens(
+        raw_pred_action, target_token_bin_indices, target_token_bin_centers = _decode_action_tokens(
             self.model,
             token_ids=np.asarray(generated_token_ids, dtype=np.int64),
             action_dim=self.action_dim,
@@ -506,6 +513,8 @@ class OpenVLAExplainabilityAdapter:
             raw_pred_action=np.asarray(raw_pred_action, dtype=np.float32),
             target_token_ids=np.asarray(generated_token_ids, dtype=np.int64),
             target_token_probs=np.asarray(generated_token_probs, dtype=np.float32),
+            target_token_bin_indices=np.asarray(target_token_bin_indices, dtype=np.int64),
+            target_token_bin_centers=np.asarray(target_token_bin_centers, dtype=np.float32),
             prompt_context=prompt_context,
             num_patches=int(num_patches if num_patches is not None else 0),
             patch_token_attributions=patch_array,
@@ -643,6 +652,8 @@ class OpenVLAExplainabilityAdapter:
             text_tokens=list(decoded.prompt_context.instruction_tokens),
             prompt=decoded.prompt_context.prompt,
             task_text=decoded.prompt_context.task_text,
+            target_token_bin_indices=decoded.target_token_bin_indices.astype(np.int64),
+            target_token_bin_centers=decoded.target_token_bin_centers.astype(np.float32),
         )
 
     def _patch_grid_side(self, baseline_step: LocalExplanationStep) -> int:
@@ -703,6 +714,8 @@ class OpenVLAExplainabilityAdapter:
                     raw_pred_action=np.asarray(decoded.raw_pred_action, dtype=np.float32),
                     target_token_ids=np.asarray(decoded.target_token_ids, dtype=np.int64),
                     target_token_probs=np.asarray(decoded.target_token_probs, dtype=np.float32),
+                    target_token_bin_indices=np.asarray(decoded.target_token_bin_indices, dtype=np.int64),
+                    target_token_bin_centers=np.asarray(decoded.target_token_bin_centers, dtype=np.float32),
                 )
             )
         return InterventionScan(effect_map=effects.reshape(grid_side, grid_side), top_candidates=candidates)
@@ -749,6 +762,8 @@ class OpenVLAExplainabilityAdapter:
                     raw_pred_action=np.asarray(decoded.raw_pred_action, dtype=np.float32),
                     target_token_ids=np.asarray(decoded.target_token_ids, dtype=np.int64),
                     target_token_probs=np.asarray(decoded.target_token_probs, dtype=np.float32),
+                    target_token_bin_indices=np.asarray(decoded.target_token_bin_indices, dtype=np.int64),
+                    target_token_bin_centers=np.asarray(decoded.target_token_bin_centers, dtype=np.float32),
                     task_char_start=int(candidate.task_char_start),
                     task_char_end=int(candidate.task_char_end),
                 )
@@ -839,6 +854,8 @@ class OpenVLAExplainabilityAdapter:
                     raw_pred_action=np.asarray(decoded.raw_pred_action, dtype=np.float32),
                     target_token_ids=np.asarray(decoded.target_token_ids, dtype=np.int64),
                     target_token_probs=np.asarray(decoded.target_token_probs, dtype=np.float32),
+                    target_token_bin_indices=np.asarray(decoded.target_token_bin_indices, dtype=np.int64),
+                    target_token_bin_centers=np.asarray(decoded.target_token_bin_centers, dtype=np.float32),
                 )
             )
             if changed:

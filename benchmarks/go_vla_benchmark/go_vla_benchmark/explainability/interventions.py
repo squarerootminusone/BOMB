@@ -24,6 +24,8 @@ class InterventionCandidateEffect:
     raw_pred_action: Optional[np.ndarray] = None
     target_token_ids: Optional[np.ndarray] = None
     target_token_probs: Optional[np.ndarray] = None
+    target_token_bin_indices: Optional[np.ndarray] = None
+    target_token_bin_centers: Optional[np.ndarray] = None
     task_char_start: Optional[int] = None
     task_char_end: Optional[int] = None
 
@@ -48,6 +50,8 @@ class CounterfactualEdit:
     raw_pred_action: np.ndarray
     target_token_ids: np.ndarray
     target_token_probs: np.ndarray
+    target_token_bin_indices: Optional[np.ndarray] = None
+    target_token_bin_centers: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -64,6 +68,8 @@ class InterventionStepTrace:
     task_text: str
     text_token_ids: np.ndarray
     text_tokens: List[str]
+    baseline_target_token_bin_indices: Optional[np.ndarray] = None
+    baseline_target_token_bin_centers: Optional[np.ndarray] = None
 
 
 @dataclass
@@ -189,6 +195,12 @@ def collect_episode_intervention_traces(
                     task_text=baseline_step.task_text,
                     text_token_ids=np.asarray(baseline_step.text_token_ids, dtype=np.int64),
                     text_tokens=list(baseline_step.text_tokens),
+                    baseline_target_token_bin_indices=None
+                    if baseline_step.target_token_bin_indices is None
+                    else np.asarray(baseline_step.target_token_bin_indices, dtype=np.int64),
+                    baseline_target_token_bin_centers=None
+                    if baseline_step.target_token_bin_centers is None
+                    else np.asarray(baseline_step.target_token_bin_centers, dtype=np.float32),
                 )
             )
 
@@ -218,6 +230,12 @@ def _candidate_to_dict(candidate: InterventionCandidateEffect) -> Dict[str, obje
         "raw_pred_action": None if candidate.raw_pred_action is None else np.asarray(candidate.raw_pred_action).tolist(),
         "target_token_ids": None if candidate.target_token_ids is None else np.asarray(candidate.target_token_ids).tolist(),
         "target_token_probs": None if candidate.target_token_probs is None else np.asarray(candidate.target_token_probs).tolist(),
+        "target_token_bin_indices": None
+        if candidate.target_token_bin_indices is None
+        else np.asarray(candidate.target_token_bin_indices).tolist(),
+        "target_token_bin_centers": None
+        if candidate.target_token_bin_centers is None
+        else np.asarray(candidate.target_token_bin_centers).tolist(),
         "task_char_start": None if candidate.task_char_start is None else int(candidate.task_char_start),
         "task_char_end": None if candidate.task_char_end is None else int(candidate.task_char_end),
     }
@@ -232,6 +250,12 @@ def _candidate_from_dict(payload: Dict[str, object]) -> InterventionCandidateEff
         raw_pred_action=None if payload.get("raw_pred_action") is None else np.asarray(payload["raw_pred_action"], dtype=np.float32),
         target_token_ids=None if payload.get("target_token_ids") is None else np.asarray(payload["target_token_ids"], dtype=np.int64),
         target_token_probs=None if payload.get("target_token_probs") is None else np.asarray(payload["target_token_probs"], dtype=np.float32),
+        target_token_bin_indices=None
+        if payload.get("target_token_bin_indices") is None
+        else np.asarray(payload["target_token_bin_indices"], dtype=np.int64),
+        target_token_bin_centers=None
+        if payload.get("target_token_bin_centers") is None
+        else np.asarray(payload["target_token_bin_centers"], dtype=np.float32),
         task_char_start=None if payload.get("task_char_start") is None else int(payload["task_char_start"]),
         task_char_end=None if payload.get("task_char_end") is None else int(payload["task_char_end"]),
     )
@@ -269,6 +293,12 @@ def _counterfactual_to_dict(edit: CounterfactualEdit) -> Dict[str, object]:
         "raw_pred_action": np.asarray(edit.raw_pred_action, dtype=np.float32).tolist(),
         "target_token_ids": np.asarray(edit.target_token_ids, dtype=np.int64).tolist(),
         "target_token_probs": np.asarray(edit.target_token_probs, dtype=np.float32).tolist(),
+        "target_token_bin_indices": None
+        if edit.target_token_bin_indices is None
+        else np.asarray(edit.target_token_bin_indices).tolist(),
+        "target_token_bin_centers": None
+        if edit.target_token_bin_centers is None
+        else np.asarray(edit.target_token_bin_centers).tolist(),
     }
 
 
@@ -286,6 +316,12 @@ def _counterfactual_from_dict(payload: Dict[str, object]) -> CounterfactualEdit:
         raw_pred_action=np.asarray(payload["raw_pred_action"], dtype=np.float32),
         target_token_ids=np.asarray(payload["target_token_ids"], dtype=np.int64),
         target_token_probs=np.asarray(payload["target_token_probs"], dtype=np.float32),
+        target_token_bin_indices=None
+        if payload.get("target_token_bin_indices") is None
+        else np.asarray(payload["target_token_bin_indices"], dtype=np.int64),
+        target_token_bin_centers=None
+        if payload.get("target_token_bin_centers") is None
+        else np.asarray(payload["target_token_bin_centers"], dtype=np.float32),
     )
 
 
@@ -295,6 +331,12 @@ def _step_to_dict(step: InterventionStepTrace) -> Dict[str, object]:
         "baseline_raw_pred_action": np.asarray(step.baseline_raw_pred_action, dtype=np.float32).tolist(),
         "baseline_target_token_ids": np.asarray(step.baseline_target_token_ids, dtype=np.int64).tolist(),
         "baseline_target_token_probs": np.asarray(step.baseline_target_token_probs, dtype=np.float32).tolist(),
+        "baseline_target_token_bin_indices": None
+        if step.baseline_target_token_bin_indices is None
+        else np.asarray(step.baseline_target_token_bin_indices, dtype=np.int64).tolist(),
+        "baseline_target_token_bin_centers": None
+        if step.baseline_target_token_bin_centers is None
+        else np.asarray(step.baseline_target_token_bin_centers, dtype=np.float32).tolist(),
         "patch_occlusion": _scan_to_dict(step.patch_occlusion),
         "text_masking": _scan_to_dict(step.text_masking),
         "counterfactual_edits": [_counterfactual_to_dict(item) for item in step.counterfactual_edits],
@@ -320,6 +362,12 @@ def _step_from_dict(payload: Dict[str, object]) -> InterventionStepTrace:
         task_text=str(payload.get("task_text", "")),
         text_token_ids=np.asarray(payload.get("text_token_ids", []), dtype=np.int64),
         text_tokens=[str(item) for item in payload.get("text_tokens", [])],
+        baseline_target_token_bin_indices=None
+        if payload.get("baseline_target_token_bin_indices") is None
+        else np.asarray(payload["baseline_target_token_bin_indices"], dtype=np.int64),
+        baseline_target_token_bin_centers=None
+        if payload.get("baseline_target_token_bin_centers") is None
+        else np.asarray(payload["baseline_target_token_bin_centers"], dtype=np.float32),
     )
 
 

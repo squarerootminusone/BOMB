@@ -21,6 +21,9 @@ PANEL_BORDER = (211, 218, 230)
 TEXT_PRIMARY = (24, 32, 45)
 TEXT_MUTED = (95, 108, 126)
 ACCENT = (50, 102, 184)
+OPENVLA_ACTION_VOCAB_SIZE = 32000
+OPENVLA_ACTION_BINS = 256
+OPENVLA_BIN_CENTERS = ((np.linspace(-1.0, 1.0, OPENVLA_ACTION_BINS)[:-1] + np.linspace(-1.0, 1.0, OPENVLA_ACTION_BINS)[1:]) / 2.0).astype(np.float32)
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -81,6 +84,49 @@ def _format_markdown_table(rows: Sequence[Sequence[object]], headers: Sequence[s
     for row in rows:
         lines.append("| " + " | ".join(str(item) for item in row) + " |")
     return "\n".join(lines)
+
+
+def _format_int_sequence(values: Optional[Sequence[object]]) -> str:
+    if values is None:
+        return ""
+    items = list(values)
+    if not items:
+        return ""
+    return " ".join(str(int(item)) for item in items)
+
+
+def _format_float_sequence(values: Optional[Sequence[object]], precision: int = 6) -> str:
+    if values is None:
+        return ""
+    items = list(values)
+    if not items:
+        return ""
+    return " ".join(f"{float(item):.{precision}f}" for item in items)
+
+
+def _resolve_action_bins(
+    token_ids: Optional[Sequence[object]],
+    bin_indices: Optional[Sequence[object]],
+    bin_centers: Optional[Sequence[object]],
+) -> tuple[Optional[List[int]], Optional[List[float]]]:
+    if bin_indices is not None and bin_centers is not None:
+        return (
+            np.asarray(bin_indices, dtype=np.int64).tolist(),
+            np.asarray(bin_centers, dtype=np.float32).tolist(),
+        )
+    if token_ids is None:
+        return None, None
+
+    token_array = np.asarray(token_ids, dtype=np.int64).reshape(-1)
+    if token_array.size == 0:
+        return [], []
+    derived_indices = np.clip(
+        OPENVLA_ACTION_VOCAB_SIZE - token_array - 1,
+        a_min=0,
+        a_max=OPENVLA_BIN_CENTERS.shape[0] - 1,
+    ).astype(np.int64)
+    derived_centers = np.asarray(OPENVLA_BIN_CENTERS[derived_indices], dtype=np.float32)
+    return derived_indices.tolist(), derived_centers.tolist()
 
 
 def _candidate_rows(candidates: Sequence[InterventionCandidateEffect]) -> List[tuple[object, ...]]:
@@ -255,8 +301,19 @@ def _step_payload(
     step_idx: int,
     panel_name: Optional[str],
 ) -> Dict[str, object]:
+    baseline_bin_indices, baseline_bin_centers = _resolve_action_bins(
+        token_ids=step.baseline_target_token_ids,
+        bin_indices=step.baseline_target_token_bin_indices,
+        bin_centers=step.baseline_target_token_bin_centers,
+    )
+
     counterfactual_rows = []
     for edit in step.counterfactual_edits:
+        predicted_bin_indices, predicted_bin_centers = _resolve_action_bins(
+            token_ids=edit.target_token_ids,
+            bin_indices=edit.target_token_bin_indices,
+            bin_centers=edit.target_token_bin_centers,
+        )
         counterfactual_rows.append(
             {
                 "rank": edit.step_rank,
@@ -268,6 +325,8 @@ def _step_payload(
                 "cumulative_sequence_logprob_drop": float(edit.cumulative_sequence_logprob_drop),
                 "changed_prediction": bool(edit.changed_prediction),
                 "predicted_token_ids": np.asarray(edit.target_token_ids, dtype=np.int64).tolist(),
+                "predicted_token_bin_indices": predicted_bin_indices,
+                "predicted_token_bin_centers": predicted_bin_centers,
             }
         )
 
@@ -279,8 +338,11 @@ def _step_payload(
         "frame_index": int(clip.frame_indices[step_idx]),
         "step_l1": float(trace.step_errors[step_idx]),
         "baseline_pred_action_xyzg": np.asarray(step.baseline_pred_action_xyzg, dtype=np.float32).tolist(),
+        "baseline_raw_pred_action": np.asarray(step.baseline_raw_pred_action, dtype=np.float32).tolist(),
         "baseline_target_token_ids": np.asarray(step.baseline_target_token_ids, dtype=np.int64).tolist(),
         "baseline_target_token_probs": np.asarray(step.baseline_target_token_probs, dtype=np.float32).tolist(),
+        "baseline_target_token_bin_indices": baseline_bin_indices,
+        "baseline_target_token_bin_centers": baseline_bin_centers,
         "patch_occlusion": None
         if step.patch_occlusion is None
         else {
@@ -291,6 +353,16 @@ def _step_payload(
                     "label": item.label,
                     "score": float(item.score),
                     "predicted_token_ids": None if item.target_token_ids is None else np.asarray(item.target_token_ids, dtype=np.int64).tolist(),
+                    "predicted_token_bin_indices": _resolve_action_bins(
+                        token_ids=item.target_token_ids,
+                        bin_indices=item.target_token_bin_indices,
+                        bin_centers=item.target_token_bin_centers,
+                    )[0],
+                    "predicted_token_bin_centers": _resolve_action_bins(
+                        token_ids=item.target_token_ids,
+                        bin_indices=item.target_token_bin_indices,
+                        bin_centers=item.target_token_bin_centers,
+                    )[1],
                 }
                 for item in step.patch_occlusion.top_candidates
             ],
@@ -309,6 +381,16 @@ def _step_payload(
                     "task_char_end": item.task_char_end,
                     "masked_query": _masked_query_text(step, item),
                     "predicted_token_ids": None if item.target_token_ids is None else np.asarray(item.target_token_ids, dtype=np.int64).tolist(),
+                    "predicted_token_bin_indices": _resolve_action_bins(
+                        token_ids=item.target_token_ids,
+                        bin_indices=item.target_token_bin_indices,
+                        bin_centers=item.target_token_bin_centers,
+                    )[0],
+                    "predicted_token_bin_centers": _resolve_action_bins(
+                        token_ids=item.target_token_ids,
+                        bin_indices=item.target_token_bin_indices,
+                        bin_centers=item.target_token_bin_centers,
+                    )[1],
                 }
                 for item in _text_mask_candidates(step, limit=None)
             ],
@@ -323,14 +405,29 @@ def _step_payload(
 
 
 def _write_step_markdown(payload: Dict[str, object], output_path: Path) -> None:
+    baseline_bin_indices = payload.get("baseline_target_token_bin_indices") or []
+    baseline_bin_centers = payload.get("baseline_target_token_bin_centers") or []
     baseline_rows = [
-        (idx, token_id, f"{float(prob):.4f}")
+        (
+            idx,
+            token_id,
+            "" if idx >= len(baseline_bin_indices) else int(baseline_bin_indices[idx]),
+            "" if idx >= len(baseline_bin_centers) else f"{float(baseline_bin_centers[idx]):.6f}",
+            f"{float(prob):.4f}",
+        )
         for idx, (token_id, prob) in enumerate(zip(payload["baseline_target_token_ids"], payload["baseline_target_token_probs"]))
     ]
     patch_rows = []
     if payload["patch_occlusion"] is not None:
         patch_rows = [
-            (item["index"], item["label"], f"{float(item['score']):.4f}", " ".join(str(tok) for tok in item["predicted_token_ids"] or []))
+            (
+                item["index"],
+                item["label"],
+                f"{float(item['score']):.4f}",
+                _format_int_sequence(item.get("predicted_token_ids")),
+                _format_int_sequence(item.get("predicted_token_bin_indices")),
+                _format_float_sequence(item.get("predicted_token_bin_centers")),
+            )
             for item in payload["patch_occlusion"]["top_candidates"]
         ]
     text_rows = []
@@ -341,7 +438,9 @@ def _write_step_markdown(payload: Dict[str, object], output_path: Path) -> None:
                 item["label"],
                 f"{float(item['score']):.4f}",
                 item.get("masked_query", ""),
-                " ".join(str(tok) for tok in item["predicted_token_ids"] or []),
+                _format_int_sequence(item.get("predicted_token_ids")),
+                _format_int_sequence(item.get("predicted_token_bin_indices")),
+                _format_float_sequence(item.get("predicted_token_bin_centers")),
             )
             for item in payload["text_masking"]["top_candidates"]
         ]
@@ -353,6 +452,9 @@ def _write_step_markdown(payload: Dict[str, object], output_path: Path) -> None:
             f"{float(item['single_effect_score']):.4f}",
             f"{float(item['cumulative_sequence_logprob_drop']):.4f}",
             item["changed_prediction"],
+            _format_int_sequence(item.get("predicted_token_ids")),
+            _format_int_sequence(item.get("predicted_token_bin_indices")),
+            _format_float_sequence(item.get("predicted_token_bin_centers")),
         )
         for item in payload["counterfactual_edits"]
     ]
@@ -366,9 +468,11 @@ def _write_step_markdown(payload: Dict[str, object], output_path: Path) -> None:
         "",
         f"Step L1: `{float(payload['step_l1']):.4f}`",
         "",
+        f"Baseline raw action: `{payload['baseline_raw_pred_action']}`",
+        "",
         "## Baseline Output Tokens",
         "",
-        _format_markdown_table(baseline_rows, headers=["position", "token_id", "probability"]),
+        _format_markdown_table(baseline_rows, headers=["position", "token_id", "bin_index", "bin_center", "probability"]),
         "",
         "## Patch Occlusion",
         "",
@@ -377,7 +481,10 @@ def _write_step_markdown(payload: Dict[str, object], output_path: Path) -> None:
     if panel_name:
         lines.extend([f"![Intervention panel]({panel_name})", ""])
     lines.append(
-        _format_markdown_table(patch_rows, headers=["index", "label", "logprob_drop", "predicted_token_ids"])
+        _format_markdown_table(
+            patch_rows,
+            headers=["index", "label", "logprob_drop", "predicted_token_ids", "predicted_bin_indices", "predicted_bin_centers"],
+        )
         if patch_rows
         else "Patch occlusion was not run for this step."
     )
@@ -389,7 +496,15 @@ def _write_step_markdown(payload: Dict[str, object], output_path: Path) -> None:
                 "",
                 _format_markdown_table(
                     text_rows,
-                    headers=["index", "label", "logprob_drop", "masked_query", "predicted_token_ids"],
+                    headers=[
+                        "index",
+                        "label",
+                        "logprob_drop",
+                        "masked_query",
+                        "predicted_token_ids",
+                        "predicted_bin_indices",
+                        "predicted_bin_centers",
+                    ],
                 )
                 if text_rows
                 else "Text masking was not run for this step.",
@@ -401,7 +516,17 @@ def _write_step_markdown(payload: Dict[str, object], output_path: Path) -> None:
     lines.append(
         _format_markdown_table(
             counterfactual_rows,
-            headers=["rank", "edit_type", "label", "single_effect", "cumulative_drop", "changed"],
+            headers=[
+                "rank",
+                "edit_type",
+                "label",
+                "single_effect",
+                "cumulative_drop",
+                "changed",
+                "predicted_token_ids",
+                "predicted_bin_indices",
+                "predicted_bin_centers",
+            ],
         )
         if counterfactual_rows
         else "No counterfactual edit trajectory was stored."

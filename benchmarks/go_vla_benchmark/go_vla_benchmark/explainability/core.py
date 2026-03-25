@@ -36,6 +36,8 @@ class LocalExplanationStep:
     text_tokens: List[str]
     prompt: str
     task_text: str
+    target_token_bin_indices: Optional[np.ndarray] = None
+    target_token_bin_centers: Optional[np.ndarray] = None
 
 
 @dataclass

@@ -75,6 +75,8 @@ class _FakeModelAdapter:
             text_tokens=["place", "stone"],
             prompt=f"In: {instruction}",
             task_text=instruction.lower(),
+            target_token_bin_indices=np.asarray([101, 102, 103], dtype=np.int64),
+            target_token_bin_centers=np.asarray([-0.75, 0.0, 0.75], dtype=np.float32),
         )
 
 
@@ -98,6 +100,8 @@ class _FakeInterventionAdapter(_FakeModelAdapter):
                     raw_pred_action=np.asarray([0.5, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
                     target_token_ids=np.asarray([21, 22, 23], dtype=np.int64),
                     target_token_probs=np.asarray([0.7, 0.6, 0.4], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([201, 202, 203], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.5, 0.1, 0.9], dtype=np.float32),
                 )
             ],
         )
@@ -124,6 +128,8 @@ class _FakeInterventionAdapter(_FakeModelAdapter):
                     raw_pred_action=np.asarray([0.4, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
                     target_token_ids=np.asarray([31, 32, 33], dtype=np.int64),
                     target_token_probs=np.asarray([0.6, 0.5, 0.4], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([301, 302, 303], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.3, 0.2, 0.8], dtype=np.float32),
                     task_char_start=None if stone_start < 0 else stone_start,
                     task_char_end=None if stone_start < 0 else stone_end,
                 )
@@ -155,6 +161,8 @@ class _FakeInterventionAdapter(_FakeModelAdapter):
                     raw_pred_action=np.asarray([0.5, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
                     target_token_ids=np.asarray([21, 22, 23], dtype=np.int64),
                     target_token_probs=np.asarray([0.7, 0.6, 0.4], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([201, 202, 203], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.5, 0.1, 0.9], dtype=np.float32),
                 ),
                 CounterfactualEdit(
                     step_rank=2,
@@ -169,6 +177,8 @@ class _FakeInterventionAdapter(_FakeModelAdapter):
                     raw_pred_action=np.asarray([0.9, 0.0, -0.1, 0.0, 0.0, 0.0, 1.0], dtype=np.float32),
                     target_token_ids=np.asarray([41, 42, 43], dtype=np.int64),
                     target_token_probs=np.asarray([0.3, 0.2, 0.1], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([401, 402, 403], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.1, 0.4, 0.95], dtype=np.float32),
                 ),
             ],
             True,
@@ -336,6 +346,10 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             bundle = load_intervention_trace_file(trace_path)
             self.assertEqual(bundle.trace_format, "openvla_intervention_tests_v1")
             self.assertEqual(bundle.traces["demo_0"].steps[0].text_masking.top_candidates[0].label, "stone")
+            np.testing.assert_array_equal(
+                bundle.traces["demo_0"].steps[0].baseline_target_token_bin_indices,
+                np.asarray([101, 102, 103], dtype=np.int64),
+            )
 
             manifest = intervention_trace_manifest(
                 dataset_path=dataset_path,
@@ -383,6 +397,12 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             self.assertIn("masked_query", payload["text_masking"]["top_candidates"][0])
             self.assertIn("Original query:", step_md.read_text())
             self.assertEqual(payload["counterfactual_edits"][1]["predicted_token_ids"], [41, 42, 43])
+            self.assertEqual(payload["baseline_target_token_bin_indices"], [101, 102, 103])
+            self.assertEqual(
+                payload["patch_occlusion"]["top_candidates"][0]["predicted_token_bin_centers"],
+                [-0.5, 0.10000000149011612, 0.8999999761581421],
+            )
+            self.assertIn("predicted_bin_centers", step_md.read_text())
 
     def test_collect_and_roundtrip_causal_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
