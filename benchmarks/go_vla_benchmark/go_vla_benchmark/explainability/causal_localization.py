@@ -89,22 +89,39 @@ def collect_episode_causal_traces(
     model_adapter: CausalLocalizationModelAdapter,
     corruption_type: str = "patch-occlusion",
     corruption_index: Optional[int] = None,
+    corruption_indices_by_key: Optional[Dict[str, Sequence[int]]] = None,
     per_cross_attention: bool = False,
 ) -> List[EpisodeCausalTrace]:
     traces: List[EpisodeCausalTrace] = []
     for clip in clips:
         pred_actions: List[np.ndarray] = []
         step_traces: List[CausalLocalizationStep] = []
-        for frame in clip.images:
+        step_corruption_indices = None
+        if corruption_indices_by_key is not None:
+            step_corruption_indices = corruption_indices_by_key.get(clip.demo_key)
+            if step_corruption_indices is None:
+                raise ValueError(f"missing intervention-matched corruption indices for demo: {clip.demo_key}")
+            if len(step_corruption_indices) != len(clip.images):
+                raise RuntimeError(
+                    f"intervention-matched corruption count mismatch for {clip.demo_key}: "
+                    f"{len(step_corruption_indices)} indices vs {len(clip.images)} clip frames"
+                )
+
+        for step_idx, frame in enumerate(clip.images):
             baseline_step = model_adapter.explain_step(frame, clip.instruction)
             pred_actions.append(np.asarray(baseline_step.pred_action_xyzg, dtype=np.float32))
+            resolved_corruption_index = (
+                corruption_index
+                if step_corruption_indices is None
+                else int(step_corruption_indices[step_idx])
+            )
             step_traces.append(
                 model_adapter.causal_localization(
                     image=frame,
                     instruction=clip.instruction,
                     baseline_step=baseline_step,
                     corruption_type=corruption_type,
-                    corruption_index=corruption_index,
+                    corruption_index=resolved_corruption_index,
                     per_cross_attention=per_cross_attention,
                 )
             )
@@ -307,4 +324,3 @@ def causal_trace_manifest(
         "num_episodes": len(items),
         "episodes": items,
     }
-

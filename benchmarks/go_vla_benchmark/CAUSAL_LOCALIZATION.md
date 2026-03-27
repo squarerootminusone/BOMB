@@ -93,6 +93,34 @@ python benchmarks/go_vla_benchmark/scripts/export_openvla_causal_localization_re
   --output-dir benchmarks/go_vla_benchmark/data/causal/report_text
 ```
 
+Match an existing intervention trace exactly so the causal run reuses the same
+demo order, the same per-demo frame indices, and the same best per-step
+patch/text choice chosen during intervention testing:
+
+```bash
+conda run --no-capture-output -n main \
+  python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py \
+  --dataset /root/dsait4125/benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+  --checkpoint /root/16-18-14/checkpoints/best-merged \
+  --trace-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_matched.npz \
+  --summary-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_matched.json \
+  --corruption-type patch-occlusion \
+  --intervention-match \
+  --device cuda:0 \
+  --attn-implementation eager
+
+python benchmarks/go_vla_benchmark/scripts/export_openvla_causal_localization_report.py \
+  --trace-input benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_matched.npz \
+  --output-dir benchmarks/go_vla_benchmark/data/causal/report_patch_matched
+```
+
+When `--intervention-match` is set, the causal collector ignores manual demo and
+frame selection and instead follows the intervention `.npz` exactly. By
+default it looks for a matching trace under
+`benchmarks/go_vla_benchmark/data/interventions/` based on the dataset stem and
+`--corruption-type`, but you can also pass an explicit intervention `.npz`
+path as the value of `--intervention-match`.
+
 Pin a specific corrupted patch or token index:
 
 ```bash

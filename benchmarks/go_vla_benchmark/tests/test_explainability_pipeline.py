@@ -16,13 +16,17 @@ sys.path.insert(0, str(REPO_ROOT / "benchmarks" / "go_vla_benchmark"))
 
 from go_vla_benchmark.explainability import (  # noqa: E402
     CausalLocalizationStep,
+    CausalTraceBundle,
     CounterfactualEdit,
     EpisodeClip,
+    EpisodeInterventionTrace,
     collect_episode_causal_traces,
     collect_episode_intervention_traces,
     LocalExplanationStep,
     InterventionCandidateEffect,
     InterventionScan,
+    InterventionStepTrace,
+    InterventionTraceBundle,
     collect_episode_traces,
     causal_trace_manifest,
     export_causal_localization_report,
@@ -32,6 +36,7 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     load_causal_trace_file,
     load_intervention_trace_file,
     load_trace_file,
+    match_intervention_trace_to_clips,
     save_causal_trace_file,
     save_intervention_trace_file,
     save_trace_file,
@@ -370,6 +375,179 @@ class ExplainabilityPipelineTest(unittest.TestCase):
         selected = select_top_k_traces_preserving_order(traces, top_k=2)
 
         self.assertEqual([trace.demo_key for trace in selected], ["demo_0", "demo_1"])
+
+    def test_match_intervention_trace_to_clips_preserves_steps_and_best_indices(self) -> None:
+        clips = [
+            EpisodeClip(
+                demo_key="demo_2",
+                instruction="demo 2",
+                images=np.asarray([np.full((4, 4, 3), fill_value=value, dtype=np.uint8) for value in (10, 20, 30)], dtype=np.uint8),
+                gt_actions=np.asarray([[0.0, 0.0, 0.0, -1.0], [1.0, 0.0, 0.0, -1.0], [2.0, 0.0, 0.0, -1.0]], dtype=np.float32),
+                frame_indices=np.asarray([0, 2, 4], dtype=np.int32),
+            ),
+            EpisodeClip(
+                demo_key="demo_0",
+                instruction="demo 0",
+                images=np.asarray([np.full((4, 4, 3), fill_value=value, dtype=np.uint8) for value in (40, 50, 60)], dtype=np.uint8),
+                gt_actions=np.asarray([[3.0, 0.0, 0.0, -1.0], [4.0, 0.0, 0.0, -1.0], [5.0, 0.0, 0.0, -1.0]], dtype=np.float32),
+                frame_indices=np.asarray([1, 3, 5], dtype=np.int32),
+            ),
+        ]
+
+        intervention_bundle = InterventionTraceBundle(
+            dataset_path=Path("/tmp/source_go.hdf5"),
+            checkpoint="/tmp/fake-openvla",
+            prompt_style="openvla",
+            dataset_adapter="go-hdf5",
+            model_adapter="openvla",
+            trace_format="openvla_intervention_tests_v1",
+            schema_version=2,
+            traces={
+                "demo_2": EpisodeInterventionTrace(
+                    demo_key="demo_2",
+                    pred_actions=np.zeros((2, 4), dtype=np.float32),
+                    step_errors=np.zeros((2,), dtype=np.float32),
+                    mean_l1=0.0,
+                    max_l1=0.0,
+                    score=0.0,
+                    steps=[
+                        InterventionStepTrace(
+                            baseline_pred_action_xyzg=np.zeros((4,), dtype=np.float32),
+                            baseline_raw_pred_action=np.zeros((7,), dtype=np.float32),
+                            baseline_target_token_ids=np.zeros((3,), dtype=np.int64),
+                            baseline_target_token_probs=np.ones((3,), dtype=np.float32),
+                            patch_occlusion=InterventionScan(
+                                effect_map=np.asarray([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32),
+                                top_candidates=[InterventionCandidateEffect(index=3, label="patch (1, 1)", score=0.4)],
+                            ),
+                            text_masking=InterventionScan(
+                                effect_map=np.asarray([0.6, 0.2], dtype=np.float32),
+                                top_candidates=[InterventionCandidateEffect(index=0, label="stone", score=0.6)],
+                            ),
+                            counterfactual_edits=[],
+                            counterfactual_success=False,
+                            prompt="prompt",
+                            task_text="task",
+                            text_token_ids=np.asarray([1, 2], dtype=np.int64),
+                            text_tokens=["a", "b"],
+                        ),
+                        InterventionStepTrace(
+                            baseline_pred_action_xyzg=np.zeros((4,), dtype=np.float32),
+                            baseline_raw_pred_action=np.zeros((7,), dtype=np.float32),
+                            baseline_target_token_ids=np.zeros((3,), dtype=np.int64),
+                            baseline_target_token_probs=np.ones((3,), dtype=np.float32),
+                            patch_occlusion=InterventionScan(
+                                effect_map=np.asarray([[0.8, 0.1], [0.3, 0.2]], dtype=np.float32),
+                                top_candidates=[InterventionCandidateEffect(index=0, label="patch (0, 0)", score=0.8)],
+                            ),
+                            text_masking=InterventionScan(
+                                effect_map=np.asarray([0.1, 0.9], dtype=np.float32),
+                                top_candidates=[InterventionCandidateEffect(index=1, label="column 4", score=0.9)],
+                            ),
+                            counterfactual_edits=[],
+                            counterfactual_success=False,
+                            prompt="prompt",
+                            task_text="task",
+                            text_token_ids=np.asarray([1, 2], dtype=np.int64),
+                            text_tokens=["a", "b"],
+                        ),
+                    ],
+                ),
+                "demo_0": EpisodeInterventionTrace(
+                    demo_key="demo_0",
+                    pred_actions=np.zeros((2, 4), dtype=np.float32),
+                    step_errors=np.zeros((2,), dtype=np.float32),
+                    mean_l1=0.0,
+                    max_l1=0.0,
+                    score=0.0,
+                    steps=[
+                        InterventionStepTrace(
+                            baseline_pred_action_xyzg=np.zeros((4,), dtype=np.float32),
+                            baseline_raw_pred_action=np.zeros((7,), dtype=np.float32),
+                            baseline_target_token_ids=np.zeros((3,), dtype=np.int64),
+                            baseline_target_token_probs=np.ones((3,), dtype=np.float32),
+                            patch_occlusion=InterventionScan(
+                                effect_map=np.asarray([[0.4, 0.2], [0.1, 0.3]], dtype=np.float32),
+                                top_candidates=[InterventionCandidateEffect(index=0, label="patch (0, 0)", score=0.4)],
+                            ),
+                            text_masking=InterventionScan(
+                                effect_map=np.asarray([0.2, 0.3], dtype=np.float32),
+                                top_candidates=[InterventionCandidateEffect(index=1, label="row 3", score=0.3)],
+                            ),
+                            counterfactual_edits=[],
+                            counterfactual_success=False,
+                            prompt="prompt",
+                            task_text="task",
+                            text_token_ids=np.asarray([1, 2], dtype=np.int64),
+                            text_tokens=["a", "b"],
+                        ),
+                        InterventionStepTrace(
+                            baseline_pred_action_xyzg=np.zeros((4,), dtype=np.float32),
+                            baseline_raw_pred_action=np.zeros((7,), dtype=np.float32),
+                            baseline_target_token_ids=np.zeros((3,), dtype=np.int64),
+                            baseline_target_token_probs=np.ones((3,), dtype=np.float32),
+                            patch_occlusion=InterventionScan(
+                                effect_map=np.asarray([[0.2, 0.7], [0.1, 0.4]], dtype=np.float32),
+                                top_candidates=[],
+                            ),
+                            text_masking=InterventionScan(
+                                effect_map=np.asarray([0.5, 0.4], dtype=np.float32),
+                                top_candidates=[],
+                            ),
+                            counterfactual_edits=[],
+                            counterfactual_success=False,
+                            prompt="prompt",
+                            task_text="task",
+                            text_token_ids=np.asarray([1, 2], dtype=np.int64),
+                            text_tokens=["a", "b"],
+                        ),
+                    ],
+                ),
+            },
+            frame_indices_by_key={
+                "demo_2": np.asarray([0, 4], dtype=np.int32),
+                "demo_0": np.asarray([1, 5], dtype=np.int32),
+            },
+            demo_keys=["demo_2", "demo_0"],
+        )
+
+        adjusted_clips, patch_indices = match_intervention_trace_to_clips(
+            clips=clips,
+            trace_bundle=intervention_bundle,
+            corruption_type="patch-occlusion",
+        )
+        self.assertEqual([clip.demo_key for clip in adjusted_clips], ["demo_2", "demo_0"])
+        np.testing.assert_array_equal(adjusted_clips[0].frame_indices, np.asarray([0, 4], dtype=np.int32))
+        np.testing.assert_array_equal(adjusted_clips[1].frame_indices, np.asarray([1, 5], dtype=np.int32))
+        np.testing.assert_array_equal(patch_indices["demo_2"], np.asarray([3, 0], dtype=np.int32))
+        np.testing.assert_array_equal(patch_indices["demo_0"], np.asarray([0, 1], dtype=np.int32))
+
+        _adjusted_clips_text, text_indices = match_intervention_trace_to_clips(
+            clips=clips,
+            trace_bundle=intervention_bundle,
+            corruption_type="text-masking",
+        )
+        np.testing.assert_array_equal(text_indices["demo_2"], np.asarray([0, 1], dtype=np.int32))
+        np.testing.assert_array_equal(text_indices["demo_0"], np.asarray([1, 0], dtype=np.int32))
+
+    def test_collect_causal_traces_uses_per_step_corruption_indices(self) -> None:
+        clips = [
+            EpisodeClip(
+                demo_key="demo_0",
+                instruction="demo 0",
+                images=np.zeros((2, 4, 4, 3), dtype=np.uint8),
+                gt_actions=np.asarray([[0.0, 0.1, -0.2, -1.0], [1.0, 0.1, -0.2, -1.0]], dtype=np.float32),
+                frame_indices=np.asarray([0, 1], dtype=np.int32),
+            )
+        ]
+        traces = collect_episode_causal_traces(
+            clips=clips,
+            model_adapter=_FakeCausalAdapter(),
+            corruption_type="patch-occlusion",
+            corruption_indices_by_key={"demo_0": np.asarray([5, 2], dtype=np.int32)},
+        )
+
+        self.assertEqual([step.corruption_index for step in traces[0].steps], [5, 2])
 
     def test_collect_and_roundtrip_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

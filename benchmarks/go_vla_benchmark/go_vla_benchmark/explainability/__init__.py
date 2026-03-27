@@ -44,6 +44,7 @@ from .interventions import (
     collect_episode_intervention_traces,
     intervention_trace_manifest,
     load_intervention_trace_file,
+    match_intervention_trace_to_clips,
     save_intervention_trace_file,
 )
 from .openvla_adapter import (
@@ -115,6 +116,7 @@ __all__ = [
     "load_causal_trace_file",
     "load_intervention_trace_file",
     "load_trace_file",
+    "match_intervention_trace_to_clips",
     "resolve_dataset_path",
     "resolve_optional_path",
     "resolve_repo_relative_path",

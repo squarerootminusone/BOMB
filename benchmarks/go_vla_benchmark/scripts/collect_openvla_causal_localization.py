@@ -7,6 +7,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Optional
 
 
 THIS_FILE = Path(__file__).resolve()
@@ -19,8 +20,11 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     DATASET_ADAPTERS,
     causal_trace_manifest,
     collect_episode_causal_traces,
+    load_intervention_trace_file,
+    match_intervention_trace_to_clips,
     resolve_dataset_path,
     resolve_optional_path,
+    resolve_repo_relative_path,
     save_causal_trace_file,
 )
 
@@ -48,6 +52,7 @@ def _print_runtime_diagnostics(args: argparse.Namespace, clips, model_adapter) -
                 "num_demos": int(len(clips)),
                 "num_frames": int(total_frames),
                 "corruption_type": args.corruption_type,
+                "intervention_match": args.intervention_match is not None,
                 "per_cross_attention": bool(args.per_cross_attention),
                 "load_in_8bit": bool(args.load_in_8bit),
                 "load_in_4bit": bool(args.load_in_4bit),
@@ -98,6 +103,18 @@ def parse_args() -> argparse.Namespace:
         help="optional explicit patch/token index; defaults to the strongest single intervention",
     )
     parser.add_argument(
+        "--intervention-match",
+        nargs="?",
+        const="auto",
+        default=None,
+        metavar="TRACE_INPUT",
+        help=(
+            "reuse the exact demo order, frame indices, and best per-step patch/text choice "
+            "from an intervention trace; omit the value to infer a matching .npz under "
+            "benchmarks/go_vla_benchmark/data/interventions/"
+        ),
+    )
+    parser.add_argument(
         "--per-cross-attention",
         action="store_true",
         help="also patch any discovered cross-attention-style blocks if the checkpoint exposes them",
@@ -105,22 +122,108 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _auto_intervention_trace_candidates(dataset_path: Path, corruption_type: str) -> list[Path]:
+    intervention_dir = REPO_ROOT / "benchmarks" / "go_vla_benchmark" / "data" / "interventions"
+    dataset_stem = dataset_path.stem
+    suffixes = (
+        ["_interventions_patches.npz", "_interventions.npz"]
+        if corruption_type == "patch-occlusion"
+        else ["_interventions_text.npz", "_interventions.npz"]
+    )
+    return [intervention_dir / f"{dataset_stem}{suffix}" for suffix in suffixes]
+
+
+def _resolve_intervention_match_trace(
+    requested: str,
+    dataset_path: Path,
+    corruption_type: str,
+) -> Path:
+    if requested != "auto":
+        trace_path = resolve_repo_relative_path(requested, repo_root=REPO_ROOT)
+        if not trace_path.is_file():
+            raise FileNotFoundError(f"intervention trace not found: {trace_path}")
+        return trace_path
+
+    candidates = _auto_intervention_trace_candidates(dataset_path=dataset_path, corruption_type=corruption_type)
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+
+    searched = "\n".join(f"  - {candidate}" for candidate in candidates)
+    raise FileNotFoundError(
+        "could not infer a matching intervention trace for --intervention-match.\n"
+        f"Searched:\n{searched}\n"
+        "Pass an explicit path to --intervention-match to override the lookup."
+    )
+
+
+def _load_intervention_matched_inputs(
+    dataset_path: Path,
+    dataset_adapter,
+    corruption_type: str,
+    intervention_match: str,
+):
+    trace_path = _resolve_intervention_match_trace(
+        requested=intervention_match,
+        dataset_path=dataset_path,
+        corruption_type=corruption_type,
+    )
+    intervention_bundle = load_intervention_trace_file(trace_path)
+    clips = dataset_adapter.load_episode_clips(
+        dataset_path=dataset_path,
+        demos=",".join(intervention_bundle.demo_keys),
+        start=0,
+        num_demos=0,
+        stride=1,
+        max_steps=0,
+    )
+    adjusted_clips, corruption_indices_by_key = match_intervention_trace_to_clips(
+        clips=clips,
+        trace_bundle=intervention_bundle,
+        corruption_type=corruption_type,
+    )
+    return trace_path, adjusted_clips, corruption_indices_by_key
+
+
+def _validate_intervention_match_args(args: argparse.Namespace) -> None:
+    if args.intervention_match is None:
+        return
+    if args.corruption_index is not None:
+        raise ValueError("--corruption-index cannot be combined with --intervention-match")
+    if args.demos is not None or args.start != 0 or args.num_demos != 0 or args.stride != 1 or args.max_steps != 0:
+        raise ValueError(
+            "--intervention-match uses the demo and frame selection stored in the intervention trace; "
+            "do not pass --demos, --start, --num-demos, --stride, or --max-steps"
+        )
+
+
 def main() -> None:
     args = parse_args()
+    _validate_intervention_match_args(args)
 
     dataset_path = resolve_dataset_path(args.dataset, repo_root=REPO_ROOT)
     trace_output_path = resolve_optional_path(args.trace_output, repo_root=REPO_ROOT)
     summary_output_path = resolve_optional_path(args.summary_output, repo_root=REPO_ROOT)
 
     dataset_adapter = DATASET_ADAPTERS[args.dataset_adapter]()
-    clips = dataset_adapter.load_episode_clips(
-        dataset_path=dataset_path,
-        demos=args.demos,
-        start=args.start,
-        num_demos=args.num_demos,
-        stride=args.stride,
-        max_steps=args.max_steps,
-    )
+    intervention_match_trace_path: Optional[Path] = None
+    corruption_indices_by_key = None
+    if args.intervention_match is None:
+        clips = dataset_adapter.load_episode_clips(
+            dataset_path=dataset_path,
+            demos=args.demos,
+            start=args.start,
+            num_demos=args.num_demos,
+            stride=args.stride,
+            max_steps=args.max_steps,
+        )
+    else:
+        intervention_match_trace_path, clips, corruption_indices_by_key = _load_intervention_matched_inputs(
+            dataset_path=dataset_path,
+            dataset_adapter=dataset_adapter,
+            corruption_type=args.corruption_type,
+            intervention_match=args.intervention_match,
+        )
     if not clips:
         raise RuntimeError("no demos selected from dataset")
 
@@ -141,6 +244,7 @@ def main() -> None:
         model_adapter=model_adapter,
         corruption_type=args.corruption_type,
         corruption_index=args.corruption_index,
+        corruption_indices_by_key=corruption_indices_by_key,
         per_cross_attention=args.per_cross_attention,
     )
 
@@ -167,6 +271,9 @@ def main() -> None:
     summary["trace_path"] = str(trace_output_path)
     summary["corruption_type"] = args.corruption_type
     summary["corruption_index"] = args.corruption_index
+    if intervention_match_trace_path is not None:
+        summary["intervention_match_trace_path"] = str(intervention_match_trace_path)
+        summary["corruption_selection"] = "intervention-match"
     summary["per_cross_attention"] = bool(args.per_cross_attention)
 
     if summary_output_path is not None:

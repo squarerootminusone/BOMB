@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Protocol, Sequence
+from typing import Dict, List, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 
@@ -444,6 +444,87 @@ def load_intervention_trace_file(trace_path: Path) -> InterventionTraceBundle:
             frame_indices_by_key=frame_indices_by_key,
             demo_keys=demo_keys,
         )
+
+
+def _best_intervention_match_index(step: InterventionStepTrace, corruption_type: str) -> int:
+    if corruption_type == "patch-occlusion":
+        scan = step.patch_occlusion
+        label = "patch occlusion"
+    elif corruption_type == "text-masking":
+        scan = step.text_masking
+        label = "text masking"
+    else:
+        raise ValueError(f"unsupported corruption_type: {corruption_type}")
+
+    if scan is None:
+        raise RuntimeError(f"intervention trace is missing {label} data for requested causal matching")
+
+    if scan.top_candidates:
+        return int(scan.top_candidates[0].index)
+
+    effect_map = np.asarray(scan.effect_map, dtype=np.float32).reshape(-1)
+    if effect_map.size == 0:
+        raise RuntimeError(f"intervention trace has empty {label} scores for requested causal matching")
+    return int(np.argmax(effect_map))
+
+
+def match_intervention_trace_to_clips(
+    clips: Sequence[EpisodeClip],
+    trace_bundle: InterventionTraceBundle,
+    corruption_type: str,
+) -> Tuple[List[EpisodeClip], Dict[str, np.ndarray]]:
+    clip_by_key = {clip.demo_key: clip for clip in clips}
+    adjusted_clips: List[EpisodeClip] = []
+    corruption_indices_by_key: Dict[str, np.ndarray] = {}
+
+    missing_demo_keys = [demo_key for demo_key in trace_bundle.demo_keys if demo_key not in clip_by_key]
+    if missing_demo_keys:
+        raise ValueError(f"requested demos missing from dataset clips: {missing_demo_keys}")
+
+    for demo_key in trace_bundle.demo_keys:
+        clip = clip_by_key[demo_key]
+        trace = trace_bundle.traces.get(demo_key)
+        if trace is None:
+            raise ValueError(f"demo missing from intervention trace bundle: {demo_key}")
+
+        frame_indices = np.asarray(trace_bundle.frame_indices_by_key[demo_key], dtype=np.int32)
+        if len(trace.steps) != int(frame_indices.shape[0]):
+            raise RuntimeError(
+                f"intervention trace length mismatch for {demo_key}: "
+                f"{len(trace.steps)} steps vs {int(frame_indices.shape[0])} stored frame indices"
+            )
+
+        frame_index_to_pos = {
+            int(frame_idx): pos
+            for pos, frame_idx in enumerate(np.asarray(clip.frame_indices, dtype=np.int32).tolist())
+        }
+        try:
+            selected_positions = np.asarray(
+                [frame_index_to_pos[int(frame_idx)] for frame_idx in frame_indices],
+                dtype=np.int32,
+            )
+        except KeyError as exc:
+            missing_frame_idx = int(exc.args[0])
+            raise RuntimeError(
+                f"frame index {missing_frame_idx} from intervention trace for {demo_key} "
+                "was not found in the dataset clip selection"
+            ) from exc
+
+        adjusted_clips.append(
+            EpisodeClip(
+                demo_key=clip.demo_key,
+                instruction=clip.instruction,
+                images=clip.images[selected_positions],
+                gt_actions=clip.gt_actions[selected_positions],
+                frame_indices=frame_indices,
+            )
+        )
+        corruption_indices_by_key[demo_key] = np.asarray(
+            [_best_intervention_match_index(step, corruption_type=corruption_type) for step in trace.steps],
+            dtype=np.int32,
+        )
+
+    return adjusted_clips, corruption_indices_by_key
 
 
 def intervention_trace_manifest(
