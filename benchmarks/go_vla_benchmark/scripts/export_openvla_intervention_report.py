@@ -45,11 +45,6 @@ def parse_args() -> argparse.Namespace:
         metavar="SCOPE",
         help="use signed patch-occlusion overlays with a shared max-abs scale; defaults to per-episode, or pass 'report' for one scale across all exported demos",
     )
-    parser.add_argument(
-        "--bilinear-interpolation",
-        action="store_true",
-        help="smooth patch-occlusion overlays with bilinear interpolation; default is nearest-neighbor to preserve patch boundaries",
-    )
     return parser.parse_args()
 
 
@@ -114,7 +109,6 @@ def main() -> None:
         traces=selected_traces,
         manifest_path=manifest_path,
         cross_step_comparison=args.cross_step_comparison,
-        bilinear_interpolation=args.bilinear_interpolation,
     )
     print(json.dumps(manifest, indent=2))
 

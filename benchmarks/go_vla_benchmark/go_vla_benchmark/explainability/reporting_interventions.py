@@ -158,17 +158,12 @@ def _trace_scale_peak(trace: EpisodeInterventionTrace) -> float:
 def _visualization_metadata(
     comparison_scope: Optional[str],
     scale_peak: Optional[float],
-    bilinear_interpolation: bool,
 ) -> Dict[str, object]:
     if comparison_scope is None:
-        return {
-            "mode": "per-step",
-            "bilinear_interpolation": bool(bilinear_interpolation),
-        }
+        return {"mode": "per-step"}
     metadata: Dict[str, object] = {
         "mode": "cross-step",
         "scope": comparison_scope,
-        "bilinear_interpolation": bool(bilinear_interpolation),
     }
     if scale_peak is not None:
         metadata["scale_peak"] = float(scale_peak)
@@ -459,7 +454,6 @@ def _render_intervention_panel(
     step_idx: int,
     output_path: Path,
     scale_peak: Optional[float] = None,
-    bilinear_interpolation: bool = False,
 ) -> None:
     frame = clip.images[step_idx]
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -482,33 +476,45 @@ def _render_intervention_panel(
     column_label_gap = 8 if column_label_height > 0 else 0
     frame_gap = 12
     margin = 12
-    canvas_w = (2 * frame_w) + frame_gap + (2 * margin) + row_label_gutter
+    canvas_w = (3 * frame_w) + (2 * frame_gap) + (2 * margin) + row_label_gutter
     canvas_h = frame_h + (2 * margin) + column_label_gap + column_label_height
     canvas = Image.new("RGB", (canvas_w, canvas_h), BG_COLOR)
     left_image_x = margin
-    right_image_x = margin + frame_w + frame_gap
+    middle_image_x = margin + frame_w + frame_gap
+    right_image_x = middle_image_x + frame_w + frame_gap + row_label_gutter
     image_y = margin
     canvas.paste(Image.fromarray(frame), (left_image_x, image_y))
     overlay = (
-        _overlay(frame, heat_grid, bilinear_interpolation=bilinear_interpolation)
+        _overlay(frame, heat_grid, bilinear_interpolation=False)
         if scale_peak is None
         else _signed_overlay(
             frame,
             heat_grid,
             scale_peak=scale_peak,
-            bilinear_interpolation=bilinear_interpolation,
+            bilinear_interpolation=False,
         )
     )
-    canvas.paste(Image.fromarray(overlay), (right_image_x, image_y))
+    bilinear_overlay = (
+        _overlay(frame, heat_grid, bilinear_interpolation=True)
+        if scale_peak is None
+        else _signed_overlay(
+            frame,
+            heat_grid,
+            scale_peak=scale_peak,
+            bilinear_interpolation=True,
+        )
+    )
+    canvas.paste(Image.fromarray(overlay), (middle_image_x, image_y))
+    canvas.paste(Image.fromarray(bilinear_overlay), (right_image_x, image_y))
 
     draw = ImageDraw.Draw(canvas)
     if grid_side > 0:
-        _draw_patch_grid(draw, left=right_image_x, top=image_y, width=frame_w, height=frame_h, grid_side=grid_side)
+        _draw_patch_grid(draw, left=middle_image_x, top=image_y, width=frame_w, height=frame_h, grid_side=grid_side)
 
         label_y = image_y + frame_h + column_label_gap
         _draw_patch_column_labels(
             draw,
-            left=right_image_x,
+            left=middle_image_x,
             width=frame_w,
             grid_side=grid_side,
             font=label_font,
@@ -520,7 +526,7 @@ def _render_intervention_panel(
             height=frame_h,
             grid_side=grid_side,
             font=label_font,
-            label_x=right_image_x + frame_w + row_label_gutter,
+            label_x=middle_image_x + frame_w + row_label_gutter,
         )
 
     canvas.save(output_path)
@@ -774,7 +780,6 @@ def export_intervention_report(
     traces: Sequence[EpisodeInterventionTrace],
     manifest_path: Optional[Path] = None,
     cross_step_comparison: Optional[str] = None,
-    bilinear_interpolation: bool = False,
 ) -> Dict[str, object]:
     if cross_step_comparison not in (None, "episode", "report"):
         raise ValueError(f"unsupported cross_step_comparison: {cross_step_comparison}")
@@ -803,7 +808,6 @@ def export_intervention_report(
         demo_visualization = _visualization_metadata(
             cross_step_comparison,
             demo_scale_peak,
-            bilinear_interpolation=bilinear_interpolation,
         )
 
         step_items = []
@@ -829,7 +833,6 @@ def export_intervention_report(
                     step_idx=step_idx,
                     output_path=demo_dir / panel_name,
                     scale_peak=demo_scale_peak,
-                    bilinear_interpolation=bilinear_interpolation,
                 )
 
             payload = _step_payload(
@@ -896,7 +899,6 @@ def export_intervention_report(
         "patch_occlusion_visualization": _visualization_metadata(
             cross_step_comparison,
             report_scale_peak,
-            bilinear_interpolation=bilinear_interpolation,
         ),
         "episodes": manifest_items,
     }

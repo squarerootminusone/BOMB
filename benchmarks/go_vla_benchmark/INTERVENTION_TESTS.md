@@ -32,7 +32,7 @@ Report export writes:
 
 ## Run Collection
 
-**For the reports, you can use --cross-step-comparison to get normalisation over all of the steps, rather than stepwise. Add --bilinear-interpolation if you want a smoothed patch overlay; by default the exporter keeps patch boundaries sharp with nearest-neighbor resizing.**
+**For the reports, you can use --cross-step-comparison to get normalisation over all of the steps, rather than stepwise. The exporter always writes a third stitched panel with a plain bilinear-smoothed overlay in addition to the raw frame and the gridded patch view.**
 
 
 Run all three intervention families:
@@ -73,8 +73,7 @@ conda run --no-capture-output -n main \
 
 python benchmarks/go_vla_benchmark/scripts/export_openvla_intervention_report.py \
   --trace-input benchmarks/go_vla_benchmark/data/interventions/source_go_interventions_patches.npz \
-  --output-dir benchmarks/go_vla_benchmark/data/interventions/report_patches \
-  --bilinear-interpolation
+  --output-dir benchmarks/go_vla_benchmark/data/interventions/report_patches
 ```
 
 Run only text masking:
@@ -115,7 +114,7 @@ In more detail, for the probabilities, this is how we dod it
 So we're just lookingfor any action changes under the modified output.
 
 
-For the .png outputs: when patch occlusion is present, left = raw frame, right = the same frame with the patch effect map resized to image size, optionally bilinearly interpolated when `--bilinear-interpolation` is passed (otherwise nearest-neighbor is used to keep patch boundaries visible), colorized, and alpha-blended. The black patch grid is drawn only on the right overlay image. For text-masking-only exports, the step PNG is just the raw frame.
+For the .png outputs: when patch occlusion is present, the exporter stitches three images side by side: left = raw frame; middle = the patch effect map resized with nearest-neighbor, colorized, alpha-blended, and annotated with the black patch grid / indices; right = a plain bilinear-smoothed version of that same overlay, with no grid and no numbers. For text-masking-only exports, the step PNG is just the raw frame.
 For the text masking we just set the attention_mask = 0 during inference for those specific tokens
 
 

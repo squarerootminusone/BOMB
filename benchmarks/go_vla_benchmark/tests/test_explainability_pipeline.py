@@ -445,11 +445,12 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 [-0.5, 0.10000000149011612, 0.8999999761581421],
             )
             self.assertIn("predicted_bin_centers", step_md.read_text())
-            self.assertFalse(payload["patch_occlusion_visualization"]["bilinear_interpolation"])
 
             panel = np.asarray(Image.open(patch_png))
             np.testing.assert_array_equal(panel[13, 14], np.asarray([20, 20, 20], dtype=np.uint8))
             np.testing.assert_array_equal(panel[13, 30], np.asarray([0, 0, 0], dtype=np.uint8))
+            self.assertGreaterEqual(int(panel.shape[1]), 64)
+            self.assertFalse(np.array_equal(panel[13, 62], np.asarray([0, 0, 0], dtype=np.uint8)))
 
     def test_export_intervention_report_cross_step_comparison(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -473,20 +474,17 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 clips=clips,
                 traces=traces,
                 cross_step_comparison="episode",
-                bilinear_interpolation=True,
             )
 
             episode = manifest["episodes"][0]
             self.assertEqual(manifest["patch_occlusion_visualization"]["mode"], "cross-step")
             self.assertEqual(episode["patch_occlusion_visualization"]["scope"], "episode")
             self.assertAlmostEqual(float(episode["patch_occlusion_visualization"]["scale_peak"]), 4.0)
-            self.assertTrue(manifest["patch_occlusion_visualization"]["bilinear_interpolation"])
 
             demo_dir = Path(episode["report_dir"])
             step_payload = json.loads((demo_dir / "step_000.json").read_text())
             self.assertEqual(step_payload["patch_occlusion_visualization"]["mode"], "cross-step")
             self.assertAlmostEqual(float(step_payload["patch_occlusion_visualization"]["scale_peak"]), 4.0)
-            self.assertTrue(step_payload["patch_occlusion_visualization"]["bilinear_interpolation"])
 
             step0_panel = np.asarray(Image.open(demo_dir / "step_000_intervention_panel.png"))
             step1_panel = np.asarray(Image.open(demo_dir / "step_001_intervention_panel.png"))
