@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import json
-import math
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -20,6 +19,21 @@ PANEL_BORDER = (211, 218, 230)
 TEXT_PRIMARY = (24, 32, 45)
 TEXT_MUTED = (95, 108, 126)
 ACCENT = (50, 102, 184)
+GRID_LINE = (228, 233, 242)
+NEGATIVE_COLOR = (56, 118, 217)
+NEUTRAL_COLOR = (245, 247, 250)
+POSITIVE_COLOR = (212, 61, 61)
+HEAT_CELL_H = 24
+LAYER_CELL_W = 88
+HEAD_CELL_W = 28
+HEADER_MIN_W = 560
+PANEL_GAP = 32
+HEADER_HEIGHT = 132
+RIGHT_MARGIN = 18
+LEGEND_BAR_W = 160
+LEGEND_BAR_H = 14
+RESTORATION_MIN = -1.0
+RESTORATION_MAX = 1.0
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -37,21 +51,105 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def _clip_grid(grid: np.ndarray, eps: float = 1e-8) -> np.ndarray:
-    grid = np.nan_to_num(np.asarray(grid, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
-    minimum = float(grid.min()) if grid.size else 0.0
-    maximum = float(grid.max()) if grid.size else 0.0
-    if maximum - minimum <= eps:
-        return np.zeros_like(grid)
-    return (grid - minimum) / (maximum - minimum)
+def _normalize_restoration_scores(
+    scores: np.ndarray,
+    score_min: float = RESTORATION_MIN,
+    score_max: float = RESTORATION_MAX,
+    eps: float = 1e-8,
+) -> np.ndarray:
+    scores = np.nan_to_num(np.asarray(scores, dtype=np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+    if abs(score_max - score_min) <= eps:
+        return np.zeros_like(scores)
+    clipped = np.clip(scores, score_min, score_max)
+    return (clipped - score_min) / (score_max - score_min)
 
 
 def _apply_colormap(values: np.ndarray) -> np.ndarray:
     values = np.clip(values.astype(np.float32), 0.0, 1.0)
-    r = np.clip(1.8 * values - 0.55, 0.0, 1.0)
-    g = np.clip(1.7 * np.sin(values * math.pi), 0.0, 1.0)
-    b = np.clip(1.65 - 1.8 * values, 0.0, 1.0)
-    return (np.stack([r, g, b], axis=-1) * 255.0).astype(np.uint8)
+    values_expanded = values[..., None]
+    negative = np.asarray(NEGATIVE_COLOR, dtype=np.float32)
+    neutral = np.asarray(NEUTRAL_COLOR, dtype=np.float32)
+    positive = np.asarray(POSITIVE_COLOR, dtype=np.float32)
+
+    lower_mix = np.clip(values_expanded * 2.0, 0.0, 1.0)
+    upper_mix = np.clip((values_expanded - 0.5) * 2.0, 0.0, 1.0)
+    lower = negative + (neutral - negative) * lower_mix
+    upper = neutral + (positive - neutral) * upper_mix
+    rgb = np.where(values_expanded <= 0.5, lower, upper)
+    return np.rint(rgb).astype(np.uint8)
+
+
+def _render_score_grid(scores: np.ndarray, cell_w: int, cell_h: int) -> Image.Image:
+    score_grid = np.asarray(scores, dtype=np.float32)
+    if score_grid.ndim != 2:
+        raise ValueError(f"expected a 2D score grid, got shape {score_grid.shape}")
+    color_grid = _apply_colormap(_normalize_restoration_scores(score_grid))
+    return Image.fromarray(color_grid).resize(
+        (max(1, cell_w * score_grid.shape[1]), max(cell_h, cell_h * score_grid.shape[0])),
+        resample=Image.Resampling.NEAREST,
+    )
+
+
+def _draw_centered_text(
+    draw: ImageDraw.ImageDraw,
+    center: Tuple[float, float],
+    text: str,
+    font: ImageFont.ImageFont,
+    fill: Tuple[int, int, int],
+) -> None:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    draw.text((center[0] - width / 2.0, center[1] - height / 2.0), text, font=font, fill=fill)
+
+
+def _cell_text_fill(rgb: np.ndarray) -> Tuple[int, int, int]:
+    luminance = 0.299 * float(rgb[0]) + 0.587 * float(rgb[1]) + 0.114 * float(rgb[2])
+    return PANEL_BG if luminance < 150.0 else TEXT_PRIMARY
+
+
+def _draw_panel_grid(
+    draw: ImageDraw.ImageDraw,
+    box: Tuple[int, int, int, int],
+    rows: int,
+    cols: int,
+    cell_w: int,
+    cell_h: int,
+) -> None:
+    for row_idx in range(rows + 1):
+        y = box[1] + row_idx * cell_h
+        draw.line((box[0], y, box[2], y), fill=GRID_LINE, width=1)
+    for col_idx in range(cols + 1):
+        x = box[0] + col_idx * cell_w
+        draw.line((x, box[1], x, box[3]), fill=GRID_LINE, width=1)
+
+
+def _draw_color_legend(
+    canvas: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    origin_x: int,
+    origin_y: int,
+    fonts: Dict[str, ImageFont.ImageFont],
+) -> None:
+    draw.text((origin_x, origin_y), "restoration scale", font=fonts["meta"], fill=ACCENT)
+    legend_bar = _render_score_grid(
+        np.linspace(RESTORATION_MIN, RESTORATION_MAX, num=LEGEND_BAR_W, dtype=np.float32).reshape(1, -1),
+        cell_w=1,
+        cell_h=LEGEND_BAR_H,
+    )
+    bar_box = (origin_x, origin_y + 18, origin_x + LEGEND_BAR_W, origin_y + 18 + LEGEND_BAR_H)
+    draw.rounded_rectangle(
+        (bar_box[0] - 1, bar_box[1] - 1, bar_box[2] + 1, bar_box[3] + 1),
+        radius=6,
+        fill=PANEL_BG,
+        outline=PANEL_BORDER,
+        width=1,
+    )
+    canvas.paste(legend_bar, (bar_box[0], bar_box[1]))
+    label_y = bar_box[3] + 10
+    _draw_centered_text(draw, (bar_box[0] + 10, label_y), "-1", font=fonts["axis"], fill=TEXT_MUTED)
+    _draw_centered_text(draw, ((bar_box[0] + bar_box[2]) / 2.0, label_y), "0", font=fonts["axis"], fill=TEXT_MUTED)
+    _draw_centered_text(draw, (bar_box[2] - 10, label_y), "+1", font=fonts["axis"], fill=TEXT_MUTED)
 
 
 def _sanitize_filename(name: str) -> str:
@@ -74,27 +172,63 @@ def _format_markdown_table(rows: Sequence[Sequence[object]], headers: Sequence[s
 def _render_heatmap(step: CausalLocalizationStep, output_path: Path) -> None:
     layer_scores = np.asarray(step.layer_restoration_scores, dtype=np.float32).reshape(-1, 1)
     head_scores = np.asarray(step.head_restoration_scores, dtype=np.float32)
-    layer_heat = Image.fromarray(_apply_colormap(_clip_grid(layer_scores))).resize((80, max(24, 24 * layer_scores.shape[0])), resample=Image.Resampling.NEAREST)
-    head_heat = Image.fromarray(_apply_colormap(_clip_grid(head_scores))).resize((max(120, 28 * head_scores.shape[1]), max(24, 24 * head_scores.shape[0])), resample=Image.Resampling.NEAREST)
+    if head_scores.ndim != 2:
+        raise ValueError(f"expected per-head scores to be 2D, got shape {head_scores.shape}")
 
-    canvas_w = layer_heat.width + head_heat.width + 90
-    canvas_h = max(layer_heat.height, head_heat.height) + 110
+    layer_count = int(layer_scores.shape[0])
+    head_count = int(head_scores.shape[1]) if head_scores.size else 0
+    if head_count <= 0:
+        raise ValueError("expected at least one attention head in the per-head score grid")
+    head_cell_w = max(HEAD_CELL_W, (120 + max(1, head_count) - 1) // max(1, head_count))
+
+    layer_heat = _render_score_grid(layer_scores, cell_w=LAYER_CELL_W, cell_h=HEAT_CELL_H)
+    head_heat = _render_score_grid(head_scores, cell_w=head_cell_w, cell_h=HEAT_CELL_H)
+
+    canvas_w = max(HEADER_MIN_W, 18 + layer_heat.width + PANEL_GAP + head_heat.width + RIGHT_MARGIN)
+    canvas_h = max(layer_heat.height, head_heat.height) + HEADER_HEIGHT + 28
     canvas = Image.new("RGB", (canvas_w, canvas_h), BG_COLOR)
     draw = ImageDraw.Draw(canvas)
-    fonts = {"title": _load_font(20), "body": _load_font(15), "meta": _load_font(13)}
+    fonts = {
+        "title": _load_font(20),
+        "body": _load_font(15),
+        "meta": _load_font(13),
+        "axis": _load_font(10),
+        "layer": _load_font(12),
+    }
 
     draw.text((18, 16), "Activation Patching Restoration", font=fonts["title"], fill=TEXT_PRIMARY)
     draw.text((18, 44), f"corruption: {step.corruption_type} -> {step.corruption_label}", font=fonts["meta"], fill=TEXT_MUTED)
     draw.text((18, 64), "left: whole-layer restoration, right: per-head restoration", font=fonts["body"], fill=TEXT_PRIMARY)
+    _draw_color_legend(canvas, draw, canvas_w - RIGHT_MARGIN - LEGEND_BAR_W, 16, fonts)
 
-    layer_box = (18, 92, 18 + layer_heat.width, 92 + layer_heat.height)
-    head_box = (48 + layer_heat.width, 92, 48 + layer_heat.width + head_heat.width, 92 + head_heat.height)
+    layer_box = (18, HEADER_HEIGHT, 18 + layer_heat.width, HEADER_HEIGHT + layer_heat.height)
+    head_box = (18 + layer_heat.width + PANEL_GAP, HEADER_HEIGHT, 18 + layer_heat.width + PANEL_GAP + head_heat.width, HEADER_HEIGHT + head_heat.height)
     draw.rounded_rectangle(layer_box, radius=12, fill=PANEL_BG, outline=PANEL_BORDER, width=1)
     draw.rounded_rectangle(head_box, radius=12, fill=PANEL_BG, outline=PANEL_BORDER, width=1)
     canvas.paste(layer_heat, (layer_box[0], layer_box[1]))
     canvas.paste(head_heat, (head_box[0], head_box[1]))
-    draw.text((layer_box[0], layer_box[1] - 18), "layers", font=fonts["meta"], fill=ACCENT)
-    draw.text((head_box[0], head_box[1] - 18), "heads", font=fonts["meta"], fill=ACCENT)
+    _draw_panel_grid(draw, layer_box, rows=layer_count, cols=1, cell_w=LAYER_CELL_W, cell_h=HEAT_CELL_H)
+    _draw_panel_grid(draw, head_box, rows=layer_count, cols=head_count, cell_w=head_cell_w, cell_h=HEAT_CELL_H)
+
+    draw.text((layer_box[0], layer_box[1] - 38), "layer index", font=fonts["meta"], fill=ACCENT)
+    draw.text((head_box[0], head_box[1] - 38), "head index", font=fonts["meta"], fill=ACCENT)
+
+    layer_pixels = np.asarray(layer_heat)
+    for layer_idx in range(layer_count):
+        center_y = layer_box[1] + layer_idx * HEAT_CELL_H + HEAT_CELL_H / 2.0
+        row_rgb = layer_pixels[layer_idx * HEAT_CELL_H + HEAT_CELL_H // 2, layer_heat.width // 2]
+        _draw_centered_text(
+            draw,
+            (layer_box[0] + layer_heat.width / 2.0, center_y),
+            str(layer_idx),
+            font=fonts["layer"],
+            fill=_cell_text_fill(row_rgb),
+        )
+
+    for head_idx in range(head_count):
+        center_x = head_box[0] + head_idx * head_cell_w + head_cell_w / 2.0
+        _draw_centered_text(draw, (center_x, head_box[1] - 14), str(head_idx), font=fonts["axis"], fill=TEXT_MUTED)
+        draw.line((center_x, head_box[1] - 4, center_x, head_box[1]), fill=PANEL_BORDER, width=1)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path)
@@ -142,6 +276,7 @@ def _write_step_markdown(payload: Dict[str, object], output_path: Path) -> None:
     layer_rows = [(idx, f"{float(score):.4f}") for idx, score in enumerate(payload["layer_restoration_scores"])]
     head_rows = []
     head_scores = np.asarray(payload["head_restoration_scores"], dtype=np.float32)
+    head_shape = tuple(int(dim) for dim in head_scores.shape) if head_scores.size else (0, 0)
     if head_scores.size:
         for layer_idx in range(head_scores.shape[0]):
             top_head = int(np.argmax(head_scores[layer_idx]))
@@ -160,6 +295,10 @@ def _write_step_markdown(payload: Dict[str, object], output_path: Path) -> None:
         f"Clean log-prob: `{float(payload['clean_sequence_logprob']):.4f}`   Corrupted log-prob: `{float(payload['corrupted_sequence_logprob']):.4f}`",
         "",
         f"![Restoration heatmap]({payload['artifacts']['restoration_heatmap']})",
+        "",
+        "Color scale in PNG: `blue <= -1`, `white = 0`, `red >= +1` with scores clipped into `[-1, +1]` before coloring.",
+        "",
+        f"Head grid shape: `{head_shape[0]} layers x {head_shape[1]} heads` (`layer_idx`, `head_idx`).",
         "",
         "## Layer Restoration",
         "",
@@ -281,4 +420,3 @@ def export_causal_localization_report(
     manifest["manifest_path"] = str(target_manifest_path)
     target_manifest_path.write_text(json.dumps(manifest, indent=2))
     return manifest
-

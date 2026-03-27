@@ -38,6 +38,10 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     trace_manifest,
 )
 from go_vla_benchmark.explainability.go_hdf5 import GoHDF5DatasetAdapter  # noqa: E402
+from go_vla_benchmark.explainability.reporting_causal import (  # noqa: E402
+    _apply_colormap,
+    _normalize_restoration_scores,
+)
 
 
 class _FakeModelAdapter:
@@ -584,6 +588,24 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             self.assertEqual(manifest["trace_format"], "openvla_causal_localization_v1")
             self.assertEqual(manifest["episodes"][0]["layer_count"], 3)
 
+    def test_causal_heatmap_colormap_uses_fixed_restoration_scale(self) -> None:
+        normalized = _normalize_restoration_scores(
+            np.asarray([[-2.0, -1.0, 0.0, 1.0, 2.0]], dtype=np.float32)
+        )
+        np.testing.assert_allclose(
+            normalized,
+            np.asarray([[0.0, 0.0, 0.5, 1.0, 1.0]], dtype=np.float32),
+        )
+
+        colors = _apply_colormap(normalized)
+        blue = colors[0, 1].astype(np.int16)
+        neutral = colors[0, 2].astype(np.int16)
+        red = colors[0, 3].astype(np.int16)
+
+        self.assertGreater(int(blue[2]), int(blue[0]))
+        self.assertLess(abs(int(neutral[0]) - int(neutral[2])), 20)
+        self.assertGreater(int(red[0]), int(red[2]))
+
     def test_export_causal_localization_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -615,6 +637,15 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             self.assertEqual(payload["best_layer"], 1)
             self.assertEqual(payload["best_head"], {"layer": 1, "head": 0})
             self.assertEqual(payload["cross_attention"][0]["label"], "cross_block_0")
+
+            step_markdown = step_md.read_text()
+            self.assertIn("Color scale in PNG: `blue <= -1`, `white = 0`, `red >= +1`", step_markdown)
+            self.assertIn("Head grid shape: `3 layers x 2 heads`", step_markdown)
+
+            heatmap = np.asarray(Image.open(heatmap_png))
+            upper_right = heatmap[24:70, -200:-10]
+            self.assertTrue(np.any(upper_right[..., 2] > upper_right[..., 0]))
+            self.assertTrue(np.any(upper_right[..., 0] > upper_right[..., 2]))
 
     def test_export_local_explanation_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

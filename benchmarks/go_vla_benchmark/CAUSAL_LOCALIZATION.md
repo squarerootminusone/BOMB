@@ -33,6 +33,19 @@ Report export writes:
 - one JSON and one Markdown file per step
 - one restoration heatmap PNG per step
 
+The exported PNG now annotates the layer rows and head columns directly in the
+image:
+
+- the left panel is one cell per decoder layer, labeled with `layer_idx`
+- the right panel is one cell per `(layer_idx, head_idx)` pair, with the head
+  axis numbered across the top
+- color uses a fixed diverging restoration scale instead of per-panel min-max
+  normalization:
+  - blue: restoration `<= -1`
+  - white: restoration `= 0`
+  - red: restoration `>= +1`
+  - values outside `[-1, +1]` are clipped before coloring
+
 ## Run Collection
 
 Use the strongest patch occlusion per step as the corrupted input:
@@ -171,3 +184,8 @@ if none are present:
   not expose separate cross-attention blocks.
 - The stored score is a normalized restoration ratio:
   `(patched - corrupted) / (clean - corrupted)` on target-token log-probability.
+- The PNG uses that same scalar score directly for coloring:
+  `u = clip((restoration + 1) / 2, 0, 1)`, then `u = 0` is blue, `u = 0.5` is
+  white, and `u = 1` is red.
+- If a heatmap looks like `32 x 32`, that means `32` decoder layers and `32`
+  attention heads per layer, not a separate `32 x 32` head-to-head matrix.
