@@ -28,11 +28,11 @@ Report export writes:
 
 - one folder per demo
 - one JSON and one Markdown file per step
-- one intervention-panel PNG per step when patch occlusion is enabled
+- one intervention-panel PNG per step when patch occlusion or text masking is enabled
 
 ## Run Collection
 
-**For the reports, you can use --cross-step-comparison to get normalisation over all of the steps, rather than stepwise**
+**For the reports, you can use --cross-step-comparison to get normalisation over all of the steps, rather than stepwise. Add --bilinear-interpolation if you want a smoothed patch overlay; by default the exporter keeps patch boundaries sharp with nearest-neighbor resizing.**
 
 
 Run all three intervention families:
@@ -73,7 +73,8 @@ conda run --no-capture-output -n main \
 
 python benchmarks/go_vla_benchmark/scripts/export_openvla_intervention_report.py \
   --trace-input benchmarks/go_vla_benchmark/data/interventions/source_go_interventions_patches.npz \
-  --output-dir benchmarks/go_vla_benchmark/data/interventions/report_patches
+  --output-dir benchmarks/go_vla_benchmark/data/interventions/report_patches \
+  --bilinear-interpolation
 ```
 
 Run only text masking:
@@ -114,7 +115,7 @@ In more detail, for the probabilities, this is how we dod it
 So we're just lookingfor any action changes under the modified output.
 
 
-For the .png outputs: left = raw frame, right = the same frame with the patch effect map resized to image size, bilinearly interpolated (due to the 16x16 patches the Prismatic7B model uses 224x224 pixel images where each patch is 14x14 pixels), colorized, and alpha-blended
+For the .png outputs: when patch occlusion is present, left = raw frame, right = the same frame with the patch effect map resized to image size, optionally bilinearly interpolated when `--bilinear-interpolation` is passed (otherwise nearest-neighbor is used to keep patch boundaries visible), colorized, and alpha-blended. The black patch grid is drawn only on the right overlay image. For text-masking-only exports, the step PNG is just the raw frame.
 For the text masking we just set the attention_mask = 0 during inference for those specific tokens
 
 

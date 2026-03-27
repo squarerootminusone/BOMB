@@ -78,26 +78,63 @@ def _apply_diverging_colormap(values: np.ndarray) -> np.ndarray:
     return (np.clip(colors, 0.0, 1.0) * 255.0).astype(np.uint8)
 
 
-def _resize_grid_to_frame(grid: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
+def _resize_grid_to_frame(
+    grid: np.ndarray,
+    target_h: int,
+    target_w: int,
+    bilinear_interpolation: bool = False,
+) -> np.ndarray:
     image = Image.fromarray((np.clip(grid, 0.0, 1.0) * 255.0).astype(np.uint8), mode="L")
-    return np.asarray(image.resize((target_w, target_h), resample=Image.Resampling.BILINEAR), dtype=np.uint8)
+    resample = Image.Resampling.BILINEAR if bilinear_interpolation else Image.Resampling.NEAREST
+    return np.asarray(image.resize((target_w, target_h), resample=resample), dtype=np.uint8)
 
 
-def _resize_signed_grid_to_frame(grid: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
+def _resize_signed_grid_to_frame(
+    grid: np.ndarray,
+    target_h: int,
+    target_w: int,
+    bilinear_interpolation: bool = False,
+) -> np.ndarray:
     image = Image.fromarray(np.asarray(grid, dtype=np.float32), mode="F")
-    return np.asarray(image.resize((target_w, target_h), resample=Image.Resampling.BILINEAR), dtype=np.float32)
+    resample = Image.Resampling.BILINEAR if bilinear_interpolation else Image.Resampling.NEAREST
+    return np.asarray(image.resize((target_w, target_h), resample=resample), dtype=np.float32)
 
 
-def _overlay(frame: np.ndarray, heat_grid: np.ndarray, alpha: float = 0.58) -> np.ndarray:
-    heat = _resize_grid_to_frame(_clip_grid(heat_grid), frame.shape[0], frame.shape[1])
+def _overlay(
+    frame: np.ndarray,
+    heat_grid: np.ndarray,
+    alpha: float = 0.58,
+    bilinear_interpolation: bool = False,
+) -> np.ndarray:
+    heat = _resize_grid_to_frame(
+        _clip_grid(heat_grid),
+        frame.shape[0],
+        frame.shape[1],
+        bilinear_interpolation=bilinear_interpolation,
+    )
     heat_rgb = _apply_colormap(heat.astype(np.float32) / 255.0)
     mixed = (frame.astype(np.float32) * (1.0 - alpha)) + (heat_rgb.astype(np.float32) * alpha)
     return np.clip(mixed, 0.0, 255.0).astype(np.uint8)
 
 
-def _signed_overlay(frame: np.ndarray, heat_grid: np.ndarray, scale_peak: float, alpha: float = 0.58) -> np.ndarray:
+def _signed_overlay(
+    frame: np.ndarray,
+    heat_grid: np.ndarray,
+    scale_peak: float,
+    alpha: float = 0.58,
+    bilinear_interpolation: bool = False,
+) -> np.ndarray:
     signed_grid, _ = _normalize_signed_grid(heat_grid, peak=scale_peak)
-    heat = np.clip(_resize_signed_grid_to_frame(signed_grid, frame.shape[0], frame.shape[1]), -1.0, 1.0)
+    heat = np.clip(
+        _resize_signed_grid_to_frame(
+            signed_grid,
+            frame.shape[0],
+            frame.shape[1],
+            bilinear_interpolation=bilinear_interpolation,
+        ),
+        -1.0,
+        1.0,
+    )
     heat_rgb = _apply_diverging_colormap(heat)
     alpha_map = np.abs(heat)[..., None] * float(alpha)
     mixed = (frame.astype(np.float32) * (1.0 - alpha_map)) + (heat_rgb.astype(np.float32) * alpha_map)
@@ -118,12 +155,20 @@ def _trace_scale_peak(trace: EpisodeInterventionTrace) -> float:
     return max(peaks, default=0.0)
 
 
-def _visualization_metadata(comparison_scope: Optional[str], scale_peak: Optional[float]) -> Dict[str, object]:
+def _visualization_metadata(
+    comparison_scope: Optional[str],
+    scale_peak: Optional[float],
+    bilinear_interpolation: bool,
+) -> Dict[str, object]:
     if comparison_scope is None:
-        return {"mode": "per-step"}
+        return {
+            "mode": "per-step",
+            "bilinear_interpolation": bool(bilinear_interpolation),
+        }
     metadata: Dict[str, object] = {
         "mode": "cross-step",
         "scope": comparison_scope,
+        "bilinear_interpolation": bool(bilinear_interpolation),
     }
     if scale_peak is not None:
         metadata["scale_peak"] = float(scale_peak)
@@ -414,11 +459,14 @@ def _render_intervention_panel(
     step_idx: int,
     output_path: Path,
     scale_peak: Optional[float] = None,
+    bilinear_interpolation: bool = False,
 ) -> None:
+    frame = clip.images[step_idx]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     if step.patch_occlusion is None:
+        Image.fromarray(frame).save(output_path)
         return
 
-    frame = clip.images[step_idx]
     frame_h, frame_w = frame.shape[:2]
     heat_grid = np.asarray(step.patch_occlusion.effect_map, dtype=np.float32)
     grid_side = int(heat_grid.shape[0]) if heat_grid.ndim == 2 and heat_grid.shape[0] == heat_grid.shape[1] else 0
@@ -441,23 +489,23 @@ def _render_intervention_panel(
     right_image_x = margin + frame_w + frame_gap
     image_y = margin
     canvas.paste(Image.fromarray(frame), (left_image_x, image_y))
-    overlay = _overlay(frame, heat_grid) if scale_peak is None else _signed_overlay(frame, heat_grid, scale_peak=scale_peak)
+    overlay = (
+        _overlay(frame, heat_grid, bilinear_interpolation=bilinear_interpolation)
+        if scale_peak is None
+        else _signed_overlay(
+            frame,
+            heat_grid,
+            scale_peak=scale_peak,
+            bilinear_interpolation=bilinear_interpolation,
+        )
+    )
     canvas.paste(Image.fromarray(overlay), (right_image_x, image_y))
 
     draw = ImageDraw.Draw(canvas)
     if grid_side > 0:
-        _draw_patch_grid(draw, left=left_image_x, top=image_y, width=frame_w, height=frame_h, grid_side=grid_side)
         _draw_patch_grid(draw, left=right_image_x, top=image_y, width=frame_w, height=frame_h, grid_side=grid_side)
 
         label_y = image_y + frame_h + column_label_gap
-        _draw_patch_column_labels(
-            draw,
-            left=left_image_x,
-            width=frame_w,
-            grid_side=grid_side,
-            font=label_font,
-            label_y=label_y,
-        )
         _draw_patch_column_labels(
             draw,
             left=right_image_x,
@@ -475,7 +523,6 @@ def _render_intervention_panel(
             label_x=right_image_x + frame_w + row_label_gutter,
         )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path)
 
 
@@ -727,6 +774,7 @@ def export_intervention_report(
     traces: Sequence[EpisodeInterventionTrace],
     manifest_path: Optional[Path] = None,
     cross_step_comparison: Optional[str] = None,
+    bilinear_interpolation: bool = False,
 ) -> Dict[str, object]:
     if cross_step_comparison not in (None, "episode", "report"):
         raise ValueError(f"unsupported cross_step_comparison: {cross_step_comparison}")
@@ -752,7 +800,11 @@ def export_intervention_report(
         demo_dir = output_dir / _sanitize_filename(trace.demo_key)
         demo_dir.mkdir(parents=True, exist_ok=True)
         demo_scale_peak = report_scale_peak if cross_step_comparison == "report" else _trace_scale_peak(trace) if cross_step_comparison == "episode" else None
-        demo_visualization = _visualization_metadata(cross_step_comparison, demo_scale_peak)
+        demo_visualization = _visualization_metadata(
+            cross_step_comparison,
+            demo_scale_peak,
+            bilinear_interpolation=bilinear_interpolation,
+        )
 
         step_items = []
         demo_lines = [
@@ -769,7 +821,7 @@ def export_intervention_report(
         for step_idx, step in enumerate(trace.steps):
             step_name = f"step_{step_idx:03d}"
             panel_name = None
-            if step.patch_occlusion is not None:
+            if step.patch_occlusion is not None or step.text_masking is not None:
                 panel_name = f"{step_name}_intervention_panel.png"
                 _render_intervention_panel(
                     clip=clip,
@@ -777,6 +829,7 @@ def export_intervention_report(
                     step_idx=step_idx,
                     output_path=demo_dir / panel_name,
                     scale_peak=demo_scale_peak,
+                    bilinear_interpolation=bilinear_interpolation,
                 )
 
             payload = _step_payload(
@@ -840,7 +893,11 @@ def export_intervention_report(
 
     manifest = {
         "output_dir": str(output_dir),
-        "patch_occlusion_visualization": _visualization_metadata(cross_step_comparison, report_scale_peak),
+        "patch_occlusion_visualization": _visualization_metadata(
+            cross_step_comparison,
+            report_scale_peak,
+            bilinear_interpolation=bilinear_interpolation,
+        ),
         "episodes": manifest_items,
     }
     readme_path = output_dir / "README.md"

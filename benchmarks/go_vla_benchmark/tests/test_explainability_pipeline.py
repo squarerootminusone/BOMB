@@ -441,6 +441,11 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 [-0.5, 0.10000000149011612, 0.8999999761581421],
             )
             self.assertIn("predicted_bin_centers", step_md.read_text())
+            self.assertFalse(payload["patch_occlusion_visualization"]["bilinear_interpolation"])
+
+            panel = np.asarray(Image.open(patch_png))
+            np.testing.assert_array_equal(panel[13, 14], np.asarray([20, 20, 20], dtype=np.uint8))
+            np.testing.assert_array_equal(panel[13, 30], np.asarray([0, 0, 0], dtype=np.uint8))
 
     def test_export_intervention_report_cross_step_comparison(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -464,17 +469,20 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 clips=clips,
                 traces=traces,
                 cross_step_comparison="episode",
+                bilinear_interpolation=True,
             )
 
             episode = manifest["episodes"][0]
             self.assertEqual(manifest["patch_occlusion_visualization"]["mode"], "cross-step")
             self.assertEqual(episode["patch_occlusion_visualization"]["scope"], "episode")
             self.assertAlmostEqual(float(episode["patch_occlusion_visualization"]["scale_peak"]), 4.0)
+            self.assertTrue(manifest["patch_occlusion_visualization"]["bilinear_interpolation"])
 
             demo_dir = Path(episode["report_dir"])
             step_payload = json.loads((demo_dir / "step_000.json").read_text())
             self.assertEqual(step_payload["patch_occlusion_visualization"]["mode"], "cross-step")
             self.assertAlmostEqual(float(step_payload["patch_occlusion_visualization"]["scale_peak"]), 4.0)
+            self.assertTrue(step_payload["patch_occlusion_visualization"]["bilinear_interpolation"])
 
             step0_panel = np.asarray(Image.open(demo_dir / "step_000_intervention_panel.png"))
             step1_panel = np.asarray(Image.open(demo_dir / "step_001_intervention_panel.png"))
@@ -496,6 +504,39 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             self.assertGreater(int(positive_pixel[0]), int(positive_pixel[2]))
             self.assertGreater(int(negative_pixel[2]), int(negative_pixel[0]))
             np.testing.assert_array_equal(zero_overlay, zero_original)
+
+    def test_export_intervention_report_text_only_still_writes_raw_panels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            dataset_path = tmp_path / "source_go.hdf5"
+            report_dir = tmp_path / "intervention_report"
+            self._write_dataset(dataset_path)
+
+            clips = GoHDF5DatasetAdapter().load_episode_clips(
+                dataset_path=dataset_path,
+                demos=None,
+                start=0,
+                num_demos=0,
+                stride=1,
+                max_steps=0,
+            )
+            traces = collect_episode_intervention_traces(
+                clips=clips,
+                model_adapter=_FakeInterventionAdapter(),
+                run_patch_occlusion=False,
+                run_text_masking=True,
+                run_counterfactual=False,
+            )
+            manifest = export_intervention_report(output_dir=report_dir, clips=clips, traces=traces)
+
+            demo_dir = Path(manifest["episodes"][0]["report_dir"])
+            panel_path = demo_dir / "step_000_intervention_panel.png"
+            payload = json.loads((demo_dir / "step_000.json").read_text())
+
+            self.assertTrue(panel_path.is_file())
+            self.assertEqual(payload["artifacts"]["intervention_panel"], "step_000_intervention_panel.png")
+            self.assertIsNone(payload["artifacts"]["patch_occlusion_panel"])
+            np.testing.assert_array_equal(np.asarray(Image.open(panel_path)), clips[0].images[0])
 
     def test_collect_and_roundtrip_causal_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
