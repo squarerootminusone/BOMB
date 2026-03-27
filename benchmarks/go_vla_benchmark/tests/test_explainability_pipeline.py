@@ -35,6 +35,7 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     save_causal_trace_file,
     save_intervention_trace_file,
     save_trace_file,
+    select_top_k_traces_preserving_order,
     trace_manifest,
 )
 from go_vla_benchmark.explainability.go_hdf5 import GoHDF5DatasetAdapter  # noqa: E402
@@ -272,34 +273,103 @@ class _FakeCausalAdapter(_FakeModelAdapter):
 
 
 class ExplainabilityPipelineTest(unittest.TestCase):
+    def _create_demo(self, data: h5py.Group, demo_key: str, fill_value: int) -> None:
+        demo = data.create_group(demo_key)
+        demo.create_dataset(
+            "actions",
+            data=np.asarray(
+                [
+                    [0.0, 0.1, -0.2, 0.0, 0.0, 0.0, 0.0],
+                    [1.0, 0.1, -0.2, 0.0, 0.0, 0.0, 0.0],
+                ],
+                dtype=np.float32,
+            ),
+        )
+        demo.create_dataset(
+            "obs/agentview_image",
+            data=np.asarray(
+                [
+                    np.full((4, 4, 3), fill_value, dtype=np.uint8),
+                    np.full((4, 4, 3), min(255, fill_value + 20), dtype=np.uint8),
+                ]
+            ),
+            compression="gzip",
+        )
+        board_state = np.zeros((2, 5, 5, 3), dtype=np.float32)
+        board_state[1, 2, 3, 1] = 1.0
+        demo.create_dataset("obs/board_state", data=board_state)
+        demo.create_dataset("stone_color", data=np.bytes_("black"))
+
     def _write_dataset(self, dataset_path: Path) -> None:
         with h5py.File(dataset_path, "w") as handle:
             data = handle.create_group("data")
-            demo = data.create_group("demo_0")
-            demo.create_dataset(
-                "actions",
-                data=np.asarray(
-                    [
-                        [0.0, 0.1, -0.2, 0.0, 0.0, 0.0, 0.0],
-                        [1.0, 0.1, -0.2, 0.0, 0.0, 0.0, 0.0],
-                    ],
-                    dtype=np.float32,
-                ),
+            self._create_demo(data, "demo_0", fill_value=20)
+
+    def test_hdf5_adapter_preserves_dataset_demo_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            dataset_path = tmp_path / "source_go.hdf5"
+
+            with h5py.File(dataset_path, "w") as handle:
+                data = handle.create_group("data", track_order=True)
+                self._create_demo(data, "demo_2", fill_value=20)
+                self._create_demo(data, "demo_0", fill_value=60)
+                self._create_demo(data, "demo_1", fill_value=100)
+
+            clips = GoHDF5DatasetAdapter().load_episode_clips(
+                dataset_path=dataset_path,
+                demos=None,
+                start=0,
+                num_demos=0,
+                stride=1,
+                max_steps=0,
             )
-            demo.create_dataset(
-                "obs/agentview_image",
-                data=np.asarray(
-                    [
-                        np.full((4, 4, 3), 20, dtype=np.uint8),
-                        np.full((4, 4, 3), 80, dtype=np.uint8),
-                    ]
-                ),
-                compression="gzip",
-            )
-            board_state = np.zeros((2, 5, 5, 3), dtype=np.float32)
-            board_state[1, 2, 3, 1] = 1.0
-            demo.create_dataset("obs/board_state", data=board_state)
-            demo.create_dataset("stone_color", data=np.bytes_("black"))
+
+            self.assertEqual([clip.demo_key for clip in clips], ["demo_2", "demo_0", "demo_1"])
+
+    def test_select_top_k_traces_preserves_input_order(self) -> None:
+        traces = [
+            collect_episode_causal_traces(
+                clips=[
+                    EpisodeClip(
+                        demo_key="demo_2",
+                        instruction="demo 2",
+                        images=np.zeros((1, 4, 4, 3), dtype=np.uint8),
+                        gt_actions=np.asarray([[0.0, 0.1, -0.2, -1.0]], dtype=np.float32),
+                        frame_indices=np.asarray([0], dtype=np.int32),
+                    )
+                ],
+                model_adapter=_FakeCausalAdapter(),
+            )[0],
+            collect_episode_causal_traces(
+                clips=[
+                    EpisodeClip(
+                        demo_key="demo_0",
+                        instruction="demo 0",
+                        images=np.zeros((1, 4, 4, 3), dtype=np.uint8),
+                        gt_actions=np.asarray([[2.0, 0.0, 0.0, -1.0]], dtype=np.float32),
+                        frame_indices=np.asarray([0], dtype=np.int32),
+                    )
+                ],
+                model_adapter=_FakeCausalAdapter(),
+            )[0],
+            collect_episode_causal_traces(
+                clips=[
+                    EpisodeClip(
+                        demo_key="demo_1",
+                        instruction="demo 1",
+                        images=np.zeros((1, 4, 4, 3), dtype=np.uint8),
+                        gt_actions=np.asarray([[1.0, 0.0, 0.0, -1.0]], dtype=np.float32),
+                        frame_indices=np.asarray([0], dtype=np.int32),
+                    )
+                ],
+                model_adapter=_FakeCausalAdapter(),
+            )[0],
+        ]
+
+        selected = select_top_k_traces_preserving_order(traces, top_k=2)
+
+        self.assertEqual([trace.demo_key for trace in selected], ["demo_0", "demo_1"])
 
     def test_collect_and_roundtrip_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

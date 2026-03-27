@@ -30,6 +30,11 @@ Report export writes:
 - one JSON and one Markdown file per step
 - one intervention-panel PNG per step when patch occlusion or text masking is enabled
 
+Both collection and report export keep demos in the same order exposed by the
+source HDF5 file, so the `.npz`, report index, and per-demo folders stay easy
+to compare side by side. If you use `--top-k` during export, it keeps that
+subset in dataset order instead of re-sorting the report by score.
+
 ## Run Collection
 
 **For the reports, you can use --cross-step-comparison to get normalisation over all of the steps, rather than stepwise. The exporter always writes a third stitched panel with a plain bilinear-smoothed overlay in addition to the raw frame and the gridded patch view.**

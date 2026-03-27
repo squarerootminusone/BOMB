@@ -33,6 +33,11 @@ Report export writes:
 - one JSON and one Markdown file per step
 - one restoration heatmap PNG per step
 
+Both collection and report export keep demos in the same order exposed by the
+source HDF5 file, so the `.npz`, report index, and per-demo folders line up for
+easy comparison. If you use `--top-k` during export, it keeps that subset in
+dataset order instead of re-sorting the report by score.
+
 The exported PNG now annotates the layer rows and head columns directly in the
 image:
 

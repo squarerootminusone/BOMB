@@ -70,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt-style", choices=["openvla", "openvla-v01"], default=None)
     parser.add_argument("--unnorm-key", type=str, default=None, help="dataset statistics key for de-normalizing actions")
     parser.add_argument("--action-dim", type=int, default=None, help="fallback action dimension when norm stats are absent")
-    parser.add_argument("--start", type=int, default=0, help="start demo index in sorted order")
+    parser.add_argument("--start", type=int, default=0, help="start demo index in dataset order")
     parser.add_argument("--num-demos", type=int, default=0, help="number of demos to process; <= 0 means all")
     parser.add_argument("--demos", type=str, default=None, help="optional comma-separated demo keys")
     parser.add_argument("--stride", type=int, default=1, help="extra frame stride after RLDS-style subsampling/filtering")

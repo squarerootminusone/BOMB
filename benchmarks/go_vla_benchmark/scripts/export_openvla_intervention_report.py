@@ -24,6 +24,7 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     resolve_dataset_path,
     resolve_optional_path,
     resolve_repo_relative_path,
+    select_top_k_traces_preserving_order,
 )
 
 
@@ -34,7 +35,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", type=str, default=None, help="optional dataset override; defaults to trace metadata")
     parser.add_argument("--dataset-adapter", choices=sorted(DATASET_ADAPTERS.keys()), default=None)
     parser.add_argument("--demos", type=str, default=None, help="optional comma-separated demo keys")
-    parser.add_argument("--top-k", type=int, default=0, help="optional failure-ranked demo limit; <= 0 means all selected demos")
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=0,
+        help="optional failure-ranked demo limit; keeps the selected subset in dataset order",
+    )
     parser.add_argument("--manifest-output", type=str, default=None, help="optional JSON manifest path")
     parser.add_argument(
         "--cross-step-comparison",
@@ -98,8 +104,7 @@ def main() -> None:
     selected_traces = [trace_bundle.traces[demo_key] for demo_key in selected_demo_keys]
 
     if args.top_k > 0 and not requested_demo_keys:
-        ranked = sorted(selected_traces, key=lambda item: item.score, reverse=True)
-        selected_traces = ranked[: int(args.top_k)]
+        selected_traces = select_top_k_traces_preserving_order(selected_traces, top_k=int(args.top_k))
         selected_keys = {trace.demo_key for trace in selected_traces}
         adjusted_clips = [clip for clip in adjusted_clips if clip.demo_key in selected_keys]
 

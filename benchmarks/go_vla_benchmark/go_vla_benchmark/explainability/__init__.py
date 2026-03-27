@@ -27,6 +27,7 @@ from .core import (
     resolve_repo_relative_path,
     save_trace_file,
     select_ranked_traces,
+    select_top_k_traces_preserving_order,
     trace_manifest,
 )
 from .go_hdf5 import GoHDF5DatasetAdapter
@@ -121,5 +122,6 @@ __all__ = [
     "save_intervention_trace_file",
     "save_trace_file",
     "select_ranked_traces",
+    "select_top_k_traces_preserving_order",
     "trace_manifest",
 ]

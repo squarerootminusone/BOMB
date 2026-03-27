@@ -18,10 +18,11 @@ from ..rlds_preprocessing import (
 from .core import EpisodeClip
 
 
-def _sorted_demo_keys(data_group: h5py.Group) -> List[str]:
-    demos = list(data_group.keys())
-    order = np.argsort([int(x.split("_")[1]) for x in demos])
-    return [demos[i] for i in order]
+def _dataset_demo_keys(data_group: h5py.Group) -> List[str]:
+    # Respect the order exposed by the HDF5 group so downstream traces and reports
+    # line up with the source dataset. When the file was created with track_order,
+    # h5py preserves insertion order here.
+    return list(data_group.keys())
 
 
 def _build_instruction(ep_group: h5py.Group, demo_idx: int) -> str:
@@ -77,7 +78,7 @@ class GoHDF5DatasetAdapter:
             if "data" not in handle:
                 raise RuntimeError(f"{dataset_path} is missing 'data' group")
 
-            all_demo_keys = _sorted_demo_keys(handle["data"])
+            all_demo_keys = _dataset_demo_keys(handle["data"])
             selected_demo_keys = _select_demo_keys(all_demo_keys, demos=demos, start=start, num_demos=num_demos)
 
             clips: List[EpisodeClip] = []

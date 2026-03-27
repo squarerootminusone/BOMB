@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Protocol, Sequence
+from typing import Dict, List, Optional, Protocol, Sequence, TypeVar
 
 import numpy as np
 
@@ -80,6 +80,14 @@ class LocalExplanationModelAdapter(Protocol):
 
     def explain_step(self, image: np.ndarray, instruction: str) -> LocalExplanationStep:
         """Run one local explanation step."""
+
+
+class ScoredTrace(Protocol):
+    demo_key: str
+    score: float
+
+
+ScoredTraceT = TypeVar("ScoredTraceT", bound=ScoredTrace)
 
 
 def _dedupe_paths(paths: Sequence[Path]) -> List[Path]:
@@ -406,6 +414,18 @@ def select_ranked_traces(
     if top_k <= 0:
         return ranked
     return ranked[:top_k]
+
+
+def select_top_k_traces_preserving_order(
+    traces: Sequence[ScoredTraceT],
+    top_k: int,
+) -> List[ScoredTraceT]:
+    if top_k <= 0 or top_k >= len(traces):
+        return list(traces)
+
+    ranked_indices = sorted(range(len(traces)), key=lambda idx: traces[idx].score, reverse=True)[: int(top_k)]
+    selected_indices = set(ranked_indices)
+    return [trace for idx, trace in enumerate(traces) if idx in selected_indices]
 
 
 def trace_manifest(
