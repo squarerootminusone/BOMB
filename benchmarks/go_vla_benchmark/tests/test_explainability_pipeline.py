@@ -1031,13 +1031,25 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             self.assertEqual(report.text_mask.label, "row 3, column 4")
             self.assertTrue(report.baseline.success)
             self.assertEqual(len(report.masked_attempts), 2)
+            self.assertTrue(report.baseline.ever_grasped)
+            self.assertTrue(report.baseline.ever_moved_puck)
+            self.assertTrue(report.baseline.ever_released)
+            self.assertEqual(report.baseline.phase_transition_steps["move_to_puck"], 0)
+            self.assertEqual(report.baseline.phase_transition_steps["pick_up_puck"], 2)
+            self.assertEqual(report.baseline.phase_transition_steps["move_puck"], 3)
+            self.assertEqual(report.baseline.phase_transition_steps["drop_puck"], 4)
             self.assertFalse(report.masked_attempts[0].success)
             self.assertTrue(report.masked_attempts[0].timed_out)
+            self.assertFalse(report.masked_attempts[0].ever_grasped)
+            self.assertEqual(report.masked_attempts[0].phase_counts["move_to_puck"], 5)
+            self.assertEqual(report.masked_attempts[0].phase_counts["pick_up_puck"], 0)
             self.assertEqual(report.baseline.trajectory[-1].phase, "drop_puck")
 
             manifest = online_text_mask_report_manifest(report)
             self.assertEqual(manifest["trace_format"], "openvla_online_task_intervention_v1")
             self.assertEqual(manifest["text_mask"]["label"], "row 3, column 4")
+            self.assertEqual(manifest["baseline"]["event_steps"]["first_grasp"], 2)
+            self.assertIsNone(manifest["masked_attempts"][0]["event_steps"]["first_grasp"])
 
             png_path = tmp_path / "online_task_report.png"
             export_online_intervention_report_png(report=report, output_path=png_path)
@@ -1072,8 +1084,20 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             move_committed=False,
             gripper_action=1.0,
             previous_phase=phase0,
+            ever_grasped=False,
         )
         phase2 = infer_online_task_phase(
+            eef_xyz=np.asarray([0.12, 0.12, 0.87], dtype=np.float32),
+            source_xyz=source_xyz,
+            target_xyz=target_xyz,
+            stone_xyz=np.asarray([0.01, 0.01, 0.81], dtype=np.float32),
+            stone_grasped=True,
+            move_committed=False,
+            gripper_action=1.0,
+            previous_phase=phase1,
+            ever_grasped=True,
+        )
+        phase3 = infer_online_task_phase(
             eef_xyz=np.asarray([0.12, 0.12, 0.87], dtype=np.float32),
             source_xyz=source_xyz,
             target_xyz=target_xyz,
@@ -1081,12 +1105,15 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             stone_grasped=True,
             move_committed=False,
             gripper_action=1.0,
-            previous_phase=phase1,
+            previous_phase=phase2,
+            ever_grasped=True,
+            ever_moved_puck=True,
         )
 
         self.assertEqual(phase0, "move_to_puck")
-        self.assertEqual(phase1, "pick_up_puck")
-        self.assertEqual(phase2, "move_puck")
+        self.assertEqual(phase1, "move_to_puck")
+        self.assertEqual(phase2, "pick_up_puck")
+        self.assertEqual(phase3, "move_puck")
 
     def test_collect_and_roundtrip_causal_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
