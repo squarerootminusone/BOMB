@@ -1145,6 +1145,198 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 _time_alpha(1, step_count=5, alpha=240),
             )
 
+    def test_online_report_renderer_accumulates_identical_masked_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            baseline_scenario = {
+                "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                "initial": {
+                    "eef_xyz": np.asarray([-0.18, -0.10, 0.95], dtype=np.float32),
+                    "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    "stone_grasped": False,
+                    "move_committed": False,
+                },
+                "steps": [
+                    {
+                        "eef_xyz": np.asarray([0.00, -0.11, 0.90], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.02, -0.12, 0.82], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.82], dtype=np.float32),
+                        "stone_grasped": True,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": True,
+                        "done": True,
+                    },
+                ],
+            }
+            masked_scenario = {
+                "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                "initial": {
+                    "eef_xyz": np.asarray([-0.16, -0.08, 0.95], dtype=np.float32),
+                    "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    "stone_grasped": False,
+                    "move_committed": False,
+                },
+                "steps": [
+                    {
+                        "eef_xyz": np.asarray([-0.04, -0.10, 0.91], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.01, -0.11, 0.88], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.01, -0.11, 0.86], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                ],
+            }
+
+            report_single = collect_online_text_mask_report(
+                policy=_FakeOnlinePolicy(),
+                env_factory=lambda: _FakeOnlineEnv(scenarios=[baseline_scenario, masked_scenario]),
+                instruction="Place a black stone on the Go board at row 3, column 4.",
+                target_row=3,
+                target_col=4,
+                max_steps=4,
+                masked_attempts=1,
+            )
+            report_double = collect_online_text_mask_report(
+                policy=_FakeOnlinePolicy(),
+                env_factory=lambda: _FakeOnlineEnv(scenarios=[baseline_scenario, masked_scenario, masked_scenario]),
+                instruction="Place a black stone on the Go board at row 3, column 4.",
+                target_row=3,
+                target_col=4,
+                max_steps=4,
+                masked_attempts=2,
+            )
+
+            single_path = tmp_path / "single_masked_attempt.png"
+            double_path = tmp_path / "double_masked_attempt.png"
+            export_online_intervention_report_png(report=report_single, output_path=single_path, trajectory_alpha_mode="time")
+            export_online_intervention_report_png(report=report_double, output_path=double_path, trajectory_alpha_mode="time")
+
+            single_image = np.asarray(Image.open(single_path), dtype=np.int16)
+            double_image = np.asarray(Image.open(double_path), dtype=np.int16)
+
+            right_single = single_image[:, single_image.shape[1] // 2 :, :]
+            right_double = double_image[:, double_image.shape[1] // 2 :, :]
+            self.assertFalse(np.array_equal(single_image, double_image))
+            self.assertLess(int(right_double.sum()), int(right_single.sum()))
+
+    def test_collect_online_report_tracking_dot_falls_back_to_topdown_projection(self) -> None:
+        class _FakeTopDownOnlyOnlineEnv:
+            def __init__(self) -> None:
+                self.environment_name = "fake_dmcontrol_go_5x5"
+                self._step_index = 0
+
+            def _state(self) -> dict[str, object]:
+                states = [
+                    {
+                        "eef_xyz": np.asarray([-0.18, -0.10, 0.95], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": True,
+                    },
+                ]
+                return states[min(self._step_index, len(states) - 1)]
+
+            def _observation(self) -> dict[str, np.ndarray]:
+                return {"agentview_image": np.full((12, 12, 3), fill_value=40, dtype=np.uint8)}
+
+            def reset(self, options=None):
+                del options
+                self._step_index = 0
+                return self._observation()
+
+            def step(self, action: np.ndarray):
+                del action
+                self._step_index = 1
+                return self._observation(), 1.0, True, {"move_committed": True}
+
+            def get_eef_pose(self) -> np.ndarray:
+                pose = np.eye(4, dtype=np.float32)
+                pose[:3, 3] = np.asarray(self._state()["eef_xyz"], dtype=np.float32)
+                return pose
+
+            def get_target_pose(self) -> np.ndarray:
+                pose = np.eye(4, dtype=np.float32)
+                pose[:3, 3] = np.asarray([0.20, 0.14, 0.82], dtype=np.float32)
+                return pose
+
+            def get_source_stone_pose(self) -> np.ndarray:
+                pose = np.eye(4, dtype=np.float32)
+                pose[:3, 3] = np.asarray([0.02, -0.12, 0.80], dtype=np.float32)
+                return pose
+
+            def get_task_stone_pose(self) -> np.ndarray | None:
+                pose = np.eye(4, dtype=np.float32)
+                pose[:3, 3] = np.asarray(self._state()["stone_xyz"], dtype=np.float32)
+                return pose
+
+            def _xy_to_image_rc(self, xy: np.ndarray, height: int, width: int) -> tuple[int, int]:
+                del xy
+                return max(0, height // 2), max(0, width // 2)
+
+            def is_active_stone_grasped(self) -> bool:
+                return bool(self._state()["stone_grasped"])
+
+            def close(self) -> None:
+                return
+
+        captured_baseline_frames: list[np.ndarray] = []
+        collect_online_text_mask_report(
+            policy=_FakeOnlinePolicy(),
+            env_factory=lambda: _FakeTopDownOnlyOnlineEnv(),
+            instruction="Place a black stone on the Go board at row 3, column 4.",
+            target_row=3,
+            target_col=4,
+            max_steps=1,
+            masked_attempts=0,
+            baseline_frame_callback=lambda frame, _timestep: captured_baseline_frames.append(
+                np.asarray(frame, dtype=np.uint8)
+            ),
+        )
+
+        self.assertTrue(captured_baseline_frames)
+        self.assertTrue(
+            np.any(
+                np.all(
+                    captured_baseline_frames[0] == np.asarray([0, 255, 255], dtype=np.uint8),
+                    axis=-1,
+                )
+            )
+        )
+
     def test_infer_online_task_phase_is_monotonic(self) -> None:
         source_xyz = np.asarray([0.0, 0.0, 0.8], dtype=np.float32)
         target_xyz = np.asarray([0.2, 0.2, 0.82], dtype=np.float32)

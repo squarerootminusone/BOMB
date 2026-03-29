@@ -294,14 +294,27 @@ def _draw_frame_disk(frame: np.ndarray, *, row: int, col: int, radius: int, colo
 
 def _frame_with_tracking_dot(frame: np.ndarray, env: OnlineInterventionEnv) -> np.ndarray:
     rendered = np.asarray(frame, dtype=np.uint8).copy()
-    projector = getattr(env, "_world_to_image_rc", None)
-    if projector is None or not callable(projector):
-        return rendered
     try:
         eef_xyz = _xyz_from_pose(env.get_eef_pose())
-        row, col = projector(eef_xyz, rendered.shape[0], rendered.shape[1])
     except Exception:
         return rendered
+    row = None
+    col = None
+    projector = getattr(env, "_world_to_image_rc", None)
+    if projector is not None and callable(projector):
+        try:
+            row, col = projector(eef_xyz, rendered.shape[0], rendered.shape[1])
+        except Exception:
+            row = None
+            col = None
+    if row is None or col is None:
+        xy_projector = getattr(env, "_xy_to_image_rc", None)
+        if xy_projector is None or not callable(xy_projector):
+            return rendered
+        try:
+            row, col = xy_projector(eef_xyz[:2], rendered.shape[0], rendered.shape[1])
+        except Exception:
+            return rendered
     radius = max(3, int(round(min(rendered.shape[0], rendered.shape[1]) * 0.018)))
     _draw_frame_disk(rendered, row=int(row), col=int(col), radius=radius + 2, color=VIDEO_TRACKING_DOT_OUTLINE_RGB)
     _draw_frame_disk(rendered, row=int(row), col=int(col), radius=radius, color=VIDEO_TRACKING_DOT_RGB)

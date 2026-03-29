@@ -120,14 +120,6 @@ def _resolve_alpha(
     return _height_alpha(z_value, z_min=z_min, z_max=z_max, alpha=alpha)
 
 
-def _composite_rgba_over_panel(color: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
-    alpha = float(color[3]) / 255.0
-    blended = []
-    for channel, bg_channel in zip(color[:3], PANEL_BG[:3]):
-        blended.append(int(round((float(bg_channel) * (1.0 - alpha)) + (float(channel) * alpha))))
-    return (blended[0], blended[1], blended[2], 255)
-
-
 def _map_projected_point(
     xyz: np.ndarray,
     *,
@@ -153,7 +145,7 @@ def _map_projected_point(
 
 def _line_color(phase: str, alpha: int) -> tuple[int, int, int, int]:
     rgb = TASK_PHASE_COLORS.get(phase, (120, 125, 132))
-    return _composite_rgba_over_panel((int(rgb[0]), int(rgb[1]), int(rgb[2]), int(alpha)))
+    return (int(rgb[0]), int(rgb[1]), int(rgb[2]), int(alpha))
 
 
 def _marker_events(
@@ -247,11 +239,17 @@ def _draw_attempt_markers(
             step_index=int(step_idx),
             step_count=step_count,
         )
-        attempt_outline = _composite_rgba_over_panel(
-            (MARKER_OUTLINE[0], MARKER_OUTLINE[1], MARKER_OUTLINE[2], marker_alpha)
+        attempt_outline = (
+            MARKER_OUTLINE[0],
+            MARKER_OUTLINE[1],
+            MARKER_OUTLINE[2],
+            marker_alpha,
         )
-        attempt_fill = _composite_rgba_over_panel(
-            (MARKER_FILL[0], MARKER_FILL[1], MARKER_FILL[2], min(255, marker_alpha + 20))
+        attempt_fill = (
+            MARKER_FILL[0],
+            MARKER_FILL[1],
+            MARKER_FILL[2],
+            min(255, marker_alpha + 20),
         )
         _draw_circle_marker(
             draw,
@@ -276,8 +274,11 @@ def _draw_attempt_markers(
             step_index=int(step_idx),
             step_count=step_count,
         )
-        solid_fill = _composite_rgba_over_panel(
-            (MARKER_SOLID[0], MARKER_SOLID[1], MARKER_SOLID[2], marker_alpha)
+        solid_fill = (
+            MARKER_SOLID[0],
+            MARKER_SOLID[1],
+            MARKER_SOLID[2],
+            marker_alpha,
         )
         _draw_circle_marker(
             draw,
@@ -302,16 +303,17 @@ def _draw_attempt_markers(
             step_index=int(step_idx),
             step_count=step_count,
         )
-        attempt_fill = _composite_rgba_over_panel(
-            (MARKER_FILL[0], MARKER_FILL[1], MARKER_FILL[2], min(255, marker_alpha + 20))
+        attempt_fill = (
+            MARKER_FILL[0],
+            MARKER_FILL[1],
+            MARKER_FILL[2],
+            min(255, marker_alpha + 20),
         )
-        release_outline = _composite_rgba_over_panel(
-            (
-                RELEASE_MARKER_OUTLINE[0],
-                RELEASE_MARKER_OUTLINE[1],
-                RELEASE_MARKER_OUTLINE[2],
-                marker_alpha,
-            )
+        release_outline = (
+            RELEASE_MARKER_OUTLINE[0],
+            RELEASE_MARKER_OUTLINE[1],
+            RELEASE_MARKER_OUTLINE[2],
+            marker_alpha,
         )
         _draw_diamond_marker(
             draw,
@@ -373,7 +375,7 @@ def _draw_attempt_trajectory(
 
 
 def _draw_plot_panel(
-    draw: ImageDraw.ImageDraw,
+    image: Image.Image,
     *,
     panel_box: tuple[int, int, int, int],
     attempts: Sequence[OnlineInterventionAttempt],
@@ -384,7 +386,8 @@ def _draw_plot_panel(
     alpha: int,
     width: int,
     alpha_mode: str,
-) -> None:
+) -> Image.Image:
+    draw = ImageDraw.Draw(image, "RGBA")
     draw.rounded_rectangle(panel_box, radius=24, fill=PANEL_BG, outline=PANEL_BORDER, width=2)
     plot_box = (
         panel_box[0] + 8,
@@ -393,8 +396,10 @@ def _draw_plot_panel(
         panel_box[3] - 8,
     )
     for attempt in attempts:
+        attempt_layer = Image.new("RGBA", image.size, color=(0, 0, 0, 0))
+        attempt_draw = ImageDraw.Draw(attempt_layer, "RGBA")
         _draw_attempt_trajectory(
-            draw,
+            attempt_draw,
             attempt=attempt,
             plot_box=plot_box,
             projection_min=projection_min,
@@ -405,9 +410,8 @@ def _draw_plot_panel(
             width=width,
             alpha_mode=alpha_mode,
         )
-    for attempt in attempts:
         _draw_attempt_markers(
-            draw,
+            attempt_draw,
             attempt=attempt,
             plot_box=plot_box,
             projection_min=projection_min,
@@ -417,6 +421,8 @@ def _draw_plot_panel(
             alpha=min(255, alpha + 36),
             alpha_mode=alpha_mode,
         )
+        image = Image.alpha_composite(image, attempt_layer)
+    return image
 
 
 def _legend_items() -> Iterable[tuple[str, tuple[int, int, int]]]:
@@ -496,12 +502,11 @@ def export_online_intervention_report_png(
     )
 
     image = Image.new("RGBA", (canvas_w, canvas_h), color=BG_COLOR)
-    draw = ImageDraw.Draw(image, "RGBA")
     projection_min, projection_max = _projection_bounds(report)
     z_min, z_max = _height_bounds(report)
 
-    _draw_plot_panel(
-        draw,
+    image = _draw_plot_panel(
+        image,
         panel_box=left_panel,
         attempts=[report.baseline],
         projection_min=projection_min,
@@ -512,8 +517,8 @@ def export_online_intervention_report_png(
         width=7,
         alpha_mode=alpha_mode,
     )
-    _draw_plot_panel(
-        draw,
+    image = _draw_plot_panel(
+        image,
         panel_box=right_panel,
         attempts=report.masked_attempts,
         projection_min=projection_min,
@@ -525,6 +530,7 @@ def export_online_intervention_report_png(
         alpha_mode=alpha_mode,
     )
 
+    draw = ImageDraw.Draw(image, "RGBA")
     legend_font = _load_font(32)
     legend_y = canvas_h - legend_h + 26
     legend_x = margin_x + 10
