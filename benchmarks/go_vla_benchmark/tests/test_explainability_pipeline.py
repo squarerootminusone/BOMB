@@ -1133,8 +1133,10 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             self.assertTrue(png_time_path.is_file())
 
             image = np.asarray(Image.open(png_path))
+            time_image = np.asarray(Image.open(png_time_path))
             self.assertGreater(int(image.shape[0]), 400)
             self.assertGreater(int(image.shape[1]), 900)
+            np.testing.assert_array_equal(image, time_image)
             self.assertTrue(np.any(np.all(image == np.asarray([45, 91, 188], dtype=np.uint8), axis=-1)))
             self.assertTrue(np.any(np.all(image == np.asarray([196, 67, 64], dtype=np.uint8), axis=-1)))
             self.assertTrue(np.any(np.all(image == np.asarray([28, 35, 44], dtype=np.uint8), axis=-1)))
@@ -1336,6 +1338,41 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 )
             )
         )
+
+    def test_online_report_attempts_share_same_initial_eef_point_with_same_reset(self) -> None:
+        scenario = {
+            "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+            "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+            "initial": {
+                "eef_xyz": np.asarray([-0.18, -0.10, 0.95], dtype=np.float32),
+                "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                "stone_grasped": False,
+                "move_committed": False,
+            },
+            "steps": [
+                {
+                    "eef_xyz": np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                    "stone_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                    "stone_grasped": False,
+                    "move_committed": True,
+                    "done": True,
+                },
+            ],
+        }
+
+        report = collect_online_text_mask_report(
+            policy=_FakeOnlinePolicy(),
+            env_factory=lambda: _FakeOnlineEnv(scenarios=[scenario, scenario, scenario]),
+            instruction="Place a black stone on the Go board at row 3, column 4.",
+            target_row=3,
+            target_col=4,
+            max_steps=1,
+            masked_attempts=2,
+        )
+
+        baseline_start = np.asarray(report.baseline.trajectory[0].eef_xyz, dtype=np.float32)
+        np.testing.assert_allclose(baseline_start, np.asarray(report.masked_attempts[0].trajectory[0].eef_xyz, dtype=np.float32))
+        np.testing.assert_allclose(baseline_start, np.asarray(report.masked_attempts[1].trajectory[0].eef_xyz, dtype=np.float32))
 
     def test_infer_online_task_phase_is_monotonic(self) -> None:
         source_xyz = np.asarray([0.0, 0.0, 0.8], dtype=np.float32)

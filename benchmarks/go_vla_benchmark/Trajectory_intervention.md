@@ -41,13 +41,14 @@ The report layout stays publication-style:
 - the exported PNG contains no extra GUI text
 
 The plotted trajectory is the arm / end-effector path shown in a true top-down
-`x,y` view. Height is no longer mapped into image position. Instead, `z`
-controls trace opacity by default: the path is most opaque near table level and
-fades to 30% opacity at the highest point reached in the rollout.
+`x,y` view. By default opacity fades by time: the run starts at 30% opacity and
+ramps up to full opacity at the end, so older trajectory segments are more
+transparent and newer segments are more opaque.
 
-If you prefer a temporal fade instead of a height fade, pass
-`--time-trajectory-color-degradation`. In that mode older trajectory segments
-are more transparent and newer segments are more opaque.
+If you prefer a height-based fade instead, pass
+`--height-trajectory-color-degradation`. In that mode the path is most opaque
+near table level and fades to 30% opacity at the highest point reached in the
+rollout.
 
 Each segment is colored by task phase:
 

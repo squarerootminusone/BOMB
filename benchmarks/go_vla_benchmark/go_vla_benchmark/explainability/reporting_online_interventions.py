@@ -470,7 +470,7 @@ def export_online_intervention_report_png(
     report: OnlineInterventionReport,
     output_path: Path,
     *,
-    trajectory_alpha_mode: str = "height",
+    trajectory_alpha_mode: str = "time",
 ) -> Path:
     output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)

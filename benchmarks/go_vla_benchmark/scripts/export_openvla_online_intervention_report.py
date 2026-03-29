@@ -74,8 +74,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=200, help="simulator steps per attempt")
     parser.add_argument(
         "--time-trajectory-color-degradation",
-        action="store_true",
-        help="fade plotted trajectory opacity by time instead of end-effector height",
+        dest="trajectory_alpha_mode",
+        action="store_const",
+        const="time",
+        default="time",
+        help="fade plotted trajectory opacity by time (default: start at 30% opacity, end at 100%)",
+    )
+    parser.add_argument(
+        "--height-trajectory-color-degradation",
+        dest="trajectory_alpha_mode",
+        action="store_const",
+        const="height",
+        help="fade plotted trajectory opacity by end-effector height instead of time",
     )
     parser.add_argument("--camera-size", type=int, default=256)
     parser.add_argument("--opening-moves", type=int, default=0)
@@ -171,7 +181,7 @@ def main() -> None:
         report_video_path.parent.mkdir(parents=True, exist_ok=True)
         with imageio.get_writer(str(report_video_path), fps=int(args.video_fps), macro_block_size=1) as writer:
             report = report_builder(lambda frame, _timestep: writer.append_data(frame))
-        trajectory_alpha_mode = "time" if args.time_trajectory_color_degradation else "height"
+        trajectory_alpha_mode = str(args.trajectory_alpha_mode).strip().lower()
         export_online_intervention_report_png(
             report=report,
             output_path=report_output_png,
