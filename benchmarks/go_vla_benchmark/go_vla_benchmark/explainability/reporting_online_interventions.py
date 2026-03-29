@@ -26,13 +26,7 @@ MARKER_FILL = (255, 255, 255, 244)
 MARKER_SOLID = (28, 35, 44, 236)
 RELEASE_MARKER_OUTLINE = (150, 55, 52, 236)
 GRIPPER_CLOSE_THRESHOLD = 0.25
-_ISO_PROJECTION = np.asarray(
-    [
-        [0.86, -0.86, 0.0],
-        [0.46, 0.46, -1.2],
-    ],
-    dtype=np.float32,
-)
+MIN_HEIGHT_OPACITY = 0.3
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -55,9 +49,9 @@ def _text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) 
     return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
-def _project_xyz(xyz: np.ndarray) -> np.ndarray:
+def _project_xy(xyz: np.ndarray) -> np.ndarray:
     points = np.asarray(xyz, dtype=np.float32).reshape(-1, 3)
-    return points @ _ISO_PROJECTION.T
+    return points[:, :2].copy()
 
 
 def _all_report_points(report: OnlineInterventionReport) -> np.ndarray:
@@ -73,12 +67,34 @@ def _all_report_points(report: OnlineInterventionReport) -> np.ndarray:
 
 
 def _projection_bounds(report: OnlineInterventionReport) -> tuple[np.ndarray, np.ndarray]:
-    projected = _project_xyz(_all_report_points(report))
+    projected = _project_xy(_all_report_points(report))
     minimum = projected.min(axis=0)
     maximum = projected.max(axis=0)
     span = np.maximum(maximum - minimum, 1e-4)
     pad = span * 0.06
     return minimum - pad, maximum + pad
+
+
+def _height_bounds(report: OnlineInterventionReport) -> tuple[float, float]:
+    z_values: list[np.ndarray] = []
+    for attempt in [report.baseline, *report.masked_attempts]:
+        if attempt.trajectory:
+            z_values.append(
+                np.asarray([float(np.asarray(step.eef_xyz, dtype=np.float32)[2]) for step in attempt.trajectory], dtype=np.float32)
+            )
+        z_values.append(np.asarray([float(np.asarray(attempt.source_xyz, dtype=np.float32)[2])], dtype=np.float32))
+        z_values.append(np.asarray([float(np.asarray(attempt.target_xyz, dtype=np.float32)[2])], dtype=np.float32))
+        if attempt.final_stone_xyz is not None:
+            z_values.append(np.asarray([float(np.asarray(attempt.final_stone_xyz, dtype=np.float32)[2])], dtype=np.float32))
+    stacked = np.concatenate(z_values, axis=0) if z_values else np.asarray([0.0], dtype=np.float32)
+    return float(stacked.min()), float(stacked.max())
+
+
+def _height_alpha(z: float, *, z_min: float, z_max: float, alpha: int) -> int:
+    span = max(float(z_max) - float(z_min), 1e-4)
+    normalized = float(np.clip((float(z) - float(z_min)) / span, 0.0, 1.0))
+    opacity = 1.0 - ((1.0 - MIN_HEIGHT_OPACITY) * normalized)
+    return int(round(float(alpha) * opacity))
 
 
 def _map_projected_point(
@@ -92,7 +108,7 @@ def _map_projected_point(
     left, top, right, bottom = box
     usable_w = max(1, right - left - (2 * padding))
     usable_h = max(1, bottom - top - (2 * padding))
-    projected = _project_xyz(np.asarray(xyz, dtype=np.float32).reshape(1, 3))[0]
+    projected = _project_xy(np.asarray(xyz, dtype=np.float32).reshape(1, 3))[0]
     span = np.maximum(projection_max - projection_min, 1e-4)
     scale = min(usable_w / span[0], usable_h / span[1])
     draw_w = span[0] * scale
@@ -182,20 +198,16 @@ def _draw_attempt_markers(
     plot_box: tuple[int, int, int, int],
     projection_min: np.ndarray,
     projection_max: np.ndarray,
+    z_min: float,
+    z_max: float,
     alpha: int,
 ) -> None:
     pickup_attempts, grasped_points, releases = _marker_events(attempt)
-    attempt_outline = (MARKER_OUTLINE[0], MARKER_OUTLINE[1], MARKER_OUTLINE[2], alpha)
-    attempt_fill = (MARKER_FILL[0], MARKER_FILL[1], MARKER_FILL[2], min(255, alpha + 20))
-    solid_fill = (MARKER_SOLID[0], MARKER_SOLID[1], MARKER_SOLID[2], alpha)
-    release_outline = (
-        RELEASE_MARKER_OUTLINE[0],
-        RELEASE_MARKER_OUTLINE[1],
-        RELEASE_MARKER_OUTLINE[2],
-        alpha,
-    )
 
     for xyz in pickup_attempts:
+        marker_alpha = _height_alpha(float(np.asarray(xyz, dtype=np.float32)[2]), z_min=z_min, z_max=z_max, alpha=alpha)
+        attempt_outline = (MARKER_OUTLINE[0], MARKER_OUTLINE[1], MARKER_OUTLINE[2], marker_alpha)
+        attempt_fill = (MARKER_FILL[0], MARKER_FILL[1], MARKER_FILL[2], min(255, marker_alpha + 20))
         _draw_circle_marker(
             draw,
             center=_map_projected_point(
@@ -210,6 +222,8 @@ def _draw_attempt_markers(
             width=2,
         )
     for xyz in grasped_points:
+        marker_alpha = _height_alpha(float(np.asarray(xyz, dtype=np.float32)[2]), z_min=z_min, z_max=z_max, alpha=alpha)
+        solid_fill = (MARKER_SOLID[0], MARKER_SOLID[1], MARKER_SOLID[2], marker_alpha)
         _draw_circle_marker(
             draw,
             center=_map_projected_point(
@@ -224,6 +238,14 @@ def _draw_attempt_markers(
             width=1,
         )
     for xyz in releases:
+        marker_alpha = _height_alpha(float(np.asarray(xyz, dtype=np.float32)[2]), z_min=z_min, z_max=z_max, alpha=alpha)
+        attempt_fill = (MARKER_FILL[0], MARKER_FILL[1], MARKER_FILL[2], min(255, marker_alpha + 20))
+        release_outline = (
+            RELEASE_MARKER_OUTLINE[0],
+            RELEASE_MARKER_OUTLINE[1],
+            RELEASE_MARKER_OUTLINE[2],
+            marker_alpha,
+        )
         _draw_diamond_marker(
             draw,
             center=_map_projected_point(
@@ -246,6 +268,8 @@ def _draw_attempt_trajectory(
     plot_box: tuple[int, int, int, int],
     projection_min: np.ndarray,
     projection_max: np.ndarray,
+    z_min: float,
+    z_max: float,
     alpha: int,
     width: int,
 ) -> None:
@@ -264,7 +288,11 @@ def _draw_attempt_trajectory(
             projection_min=projection_min,
             projection_max=projection_max,
         )
-        draw.line([prev_point, next_point], fill=_line_color(step.phase, alpha=alpha), width=width)
+        segment_z = 0.5 * (
+            float(np.asarray(prev_step.eef_xyz, dtype=np.float32)[2]) + float(np.asarray(step.eef_xyz, dtype=np.float32)[2])
+        )
+        segment_alpha = _height_alpha(segment_z, z_min=z_min, z_max=z_max, alpha=alpha)
+        draw.line([prev_point, next_point], fill=_line_color(step.phase, alpha=segment_alpha), width=width)
 
 
 def _draw_plot_panel(
@@ -274,6 +302,8 @@ def _draw_plot_panel(
     attempts: Sequence[OnlineInterventionAttempt],
     projection_min: np.ndarray,
     projection_max: np.ndarray,
+    z_min: float,
+    z_max: float,
     alpha: int,
     width: int,
 ) -> None:
@@ -291,6 +321,8 @@ def _draw_plot_panel(
             plot_box=plot_box,
             projection_min=projection_min,
             projection_max=projection_max,
+            z_min=z_min,
+            z_max=z_max,
             alpha=alpha,
             width=width,
         )
@@ -301,6 +333,8 @@ def _draw_plot_panel(
             plot_box=plot_box,
             projection_min=projection_min,
             projection_max=projection_max,
+            z_min=z_min,
+            z_max=z_max,
             alpha=min(255, alpha + 36),
         )
 
@@ -379,6 +413,7 @@ def export_online_intervention_report_png(
     image = Image.new("RGBA", (canvas_w, canvas_h), color=BG_COLOR)
     draw = ImageDraw.Draw(image, "RGBA")
     projection_min, projection_max = _projection_bounds(report)
+    z_min, z_max = _height_bounds(report)
 
     _draw_plot_panel(
         draw,
@@ -386,6 +421,8 @@ def export_online_intervention_report_png(
         attempts=[report.baseline],
         projection_min=projection_min,
         projection_max=projection_max,
+        z_min=z_min,
+        z_max=z_max,
         alpha=240,
         width=7,
     )
@@ -395,6 +432,8 @@ def export_online_intervention_report_png(
         attempts=report.masked_attempts,
         projection_min=projection_min,
         projection_max=projection_max,
+        z_min=z_min,
+        z_max=z_max,
         alpha=112,
         width=6,
     )

@@ -40,8 +40,10 @@ The report layout stays publication-style:
 - the legend stays at the bottom
 - the exported PNG contains no extra GUI text
 
-The plotted trajectory is the arm / end-effector point in 3D projected into a
-2D isometric view.
+The plotted trajectory is the arm / end-effector path shown in a true top-down
+`x,y` view. Height is no longer mapped into image position. Instead, `z`
+controls trace opacity: the path is most opaque near table level and fades to
+30% opacity at the highest point reached in the rollout.
 
 Each segment is colored by task phase:
 
