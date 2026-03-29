@@ -12,6 +12,16 @@ Pre-trained checkpoints and evaluation videos are available on HuggingFace: [MJ2
 | **SpatialVLA** | `IPEC-COMMUNITY/spatialvla-4b-224-pt` | 4B | LoRA r=32 | — | 0% |
 | **pi0** | `pi0_base` (PaliGemma 3B) | 3.3B | Full fine-tune | 0.083 | 0% |
 
+## Training Scripts
+
+| Model | Script | Config |
+|-------|--------|--------|
+| **OpenVLA** | `openvla/vla-scripts/finetune.py` | `openvla/configs/finetune.yaml` |
+| **SpatialVLA** | `spatialvla/train/spatialvla_finetune.py` | `spatialvla/configs/finetune.yaml` |
+| **pi0** | `openpi/scripts/train.py` | `openpi/src/openpi/training/config.py` (config name: `pi0_go_vla`) |
+
+pi0 requires converting the RLDS dataset to LeRobot format first via `openpi/examples/go_vla/convert_go_vla_to_lerobot.py`.
+
 ## Loading Checkpoints
 
 ### OpenVLA (LoRA adapter)
