@@ -901,6 +901,7 @@ class ExplainabilityPipelineTest(unittest.TestCase):
     def test_collect_and_export_online_text_mask_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
+            captured_baseline_frames: list[tuple[int, np.ndarray]] = []
             scenarios = [
                 {
                     "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
@@ -1026,11 +1027,19 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 max_steps=4,
                 masked_attempts=2,
                 checkpoint="/tmp/fake-openvla",
+                baseline_frame_callback=lambda frame, timestep: captured_baseline_frames.append(
+                    (int(timestep), np.asarray(frame, dtype=np.uint8))
+                ),
             )
 
             self.assertEqual(report.text_mask.label, "row 3, column 4")
             self.assertTrue(report.baseline.success)
             self.assertEqual(len(report.masked_attempts), 2)
+            self.assertEqual(
+                [timestep for timestep, _frame in captured_baseline_frames],
+                list(range(report.baseline.steps_taken + 1)),
+            )
+            self.assertEqual(captured_baseline_frames[0][1].shape, (12, 12, 3))
             self.assertTrue(report.baseline.ever_grasped)
             self.assertTrue(report.baseline.ever_moved_puck)
             self.assertTrue(report.baseline.ever_released)

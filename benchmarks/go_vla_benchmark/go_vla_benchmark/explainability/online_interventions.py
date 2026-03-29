@@ -325,10 +325,13 @@ def _rollout_attempt(
     attempt_index: int,
     title: str,
     reset_options: GoResetOptions,
+    frame_callback: Optional[Callable[[np.ndarray, int], None]] = None,
 ) -> OnlineInterventionAttempt:
     obs = env.reset(options=reset_options)
     if "agentview_image" not in obs:
         raise RuntimeError("online intervention rollouts require env observations with `agentview_image`")
+    if frame_callback is not None:
+        frame_callback(np.asarray(obs["agentview_image"], dtype=np.uint8).copy(), 0)
 
     target_xyz = _xyz_from_pose(env.get_target_pose())
     source_xyz = _xyz_from_pose(env.get_source_stone_pose())
@@ -369,6 +372,8 @@ def _rollout_attempt(
             raise ValueError(f"expected 4D action prediction, got shape {action_xyzg.shape}")
 
         obs, _reward, done, info = env.step(action_xyzg[:4].astype(np.float32))
+        if frame_callback is not None:
+            frame_callback(np.asarray(obs["agentview_image"], dtype=np.uint8).copy(), timestep + 1)
         last_info = dict(info)
         current_stone_xyz = _optional_xyz_from_pose(env.get_task_stone_pose())
         phase = phase_tracker.update(
@@ -440,6 +445,7 @@ def collect_online_text_mask_report(
     checkpoint: Optional[str] = None,
     mask_index: Optional[int] = None,
     mask_label: Optional[str] = None,
+    baseline_frame_callback: Optional[Callable[[np.ndarray, int], None]] = None,
 ) -> OnlineInterventionReport:
     env = env_factory()
     try:
@@ -467,6 +473,7 @@ def collect_online_text_mask_report(
             attempt_index=0,
             title="No Mask",
             reset_options=reset_options,
+            frame_callback=baseline_frame_callback,
         )
         masked_runs = [
             _rollout_attempt(
@@ -480,6 +487,7 @@ def collect_online_text_mask_report(
                 attempt_index=attempt_idx + 1,
                 title=f"Mask Attempt {attempt_idx + 1}",
                 reset_options=reset_options,
+                frame_callback=None,
             )
             for attempt_idx in range(max(0, int(masked_attempts)))
         ]
