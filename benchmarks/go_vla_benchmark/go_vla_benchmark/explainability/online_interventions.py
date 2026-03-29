@@ -16,6 +16,8 @@ from .openvla_adapter import TextMaskCandidateSpec
 
 ONLINE_TASK_INTERVENTION_FORMAT = "openvla_online_task_intervention_v1"
 ONLINE_TASK_INTERVENTION_SCHEMA_VERSION = 1
+VIDEO_TRACKING_DOT_RGB = np.asarray([0, 255, 255], dtype=np.uint8)
+VIDEO_TRACKING_DOT_OUTLINE_RGB = np.asarray([14, 22, 32], dtype=np.uint8)
 
 TASK_PHASE_ORDER = (
     "move_to_puck",
@@ -278,6 +280,34 @@ def _optional_xyz_from_pose(pose_or_xyz: Optional[np.ndarray]) -> Optional[np.nd
     return _xyz_from_pose(pose_or_xyz)
 
 
+def _draw_frame_disk(frame: np.ndarray, *, row: int, col: int, radius: int, color: np.ndarray) -> None:
+    height, width = frame.shape[:2]
+    r0 = max(0, int(row) - int(radius))
+    r1 = min(height - 1, int(row) + int(radius))
+    c0 = max(0, int(col) - int(radius))
+    c1 = min(width - 1, int(col) + int(radius))
+    for rr in range(r0, r1 + 1):
+        for cc in range(c0, c1 + 1):
+            if ((rr - int(row)) * (rr - int(row))) + ((cc - int(col)) * (cc - int(col))) <= int(radius) * int(radius):
+                frame[rr, cc] = color
+
+
+def _frame_with_tracking_dot(frame: np.ndarray, env: OnlineInterventionEnv) -> np.ndarray:
+    rendered = np.asarray(frame, dtype=np.uint8).copy()
+    projector = getattr(env, "_world_to_image_rc", None)
+    if projector is None or not callable(projector):
+        return rendered
+    try:
+        eef_xyz = _xyz_from_pose(env.get_eef_pose())
+        row, col = projector(eef_xyz, rendered.shape[0], rendered.shape[1])
+    except Exception:
+        return rendered
+    radius = max(3, int(round(min(rendered.shape[0], rendered.shape[1]) * 0.018)))
+    _draw_frame_disk(rendered, row=int(row), col=int(col), radius=radius + 2, color=VIDEO_TRACKING_DOT_OUTLINE_RGB)
+    _draw_frame_disk(rendered, row=int(row), col=int(col), radius=radius, color=VIDEO_TRACKING_DOT_RGB)
+    return rendered
+
+
 def _apply_patch_mask(image: np.ndarray, patch_mask: PatchMaskCandidateSpec) -> np.ndarray:
     occluded = np.asarray(image, dtype=np.uint8).copy()
     grid_side = max(1, int(patch_mask.grid_side))
@@ -519,7 +549,7 @@ def _rollout_attempt(
     if "agentview_image" not in obs:
         raise RuntimeError("online intervention rollouts require env observations with `agentview_image`")
     if frame_callback is not None:
-        frame_callback(np.asarray(obs["agentview_image"], dtype=np.uint8).copy(), 0)
+        frame_callback(_frame_with_tracking_dot(np.asarray(obs["agentview_image"], dtype=np.uint8), env), 0)
 
     target_xyz = _xyz_from_pose(env.get_target_pose())
     source_xyz = _xyz_from_pose(env.get_source_stone_pose())
@@ -565,7 +595,7 @@ def _rollout_attempt(
 
         obs, _reward, done, info = env.step(action_xyzg[:4].astype(np.float32))
         if frame_callback is not None:
-            frame_callback(np.asarray(obs["agentview_image"], dtype=np.uint8).copy(), timestep + 1)
+            frame_callback(_frame_with_tracking_dot(np.asarray(obs["agentview_image"], dtype=np.uint8), env), timestep + 1)
         last_info = dict(info)
         current_stone_xyz = _optional_xyz_from_pose(env.get_task_stone_pose())
         phase = phase_tracker.update(

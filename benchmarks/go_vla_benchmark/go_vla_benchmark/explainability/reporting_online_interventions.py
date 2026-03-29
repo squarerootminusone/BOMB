@@ -26,7 +26,7 @@ MARKER_FILL = (255, 255, 255, 244)
 MARKER_SOLID = (28, 35, 44, 236)
 RELEASE_MARKER_OUTLINE = (150, 55, 52, 236)
 GRIPPER_CLOSE_THRESHOLD = 0.25
-MIN_HEIGHT_OPACITY = 0.3
+MIN_TRAJECTORY_OPACITY = 0.3
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -93,8 +93,31 @@ def _height_bounds(report: OnlineInterventionReport) -> tuple[float, float]:
 def _height_alpha(z: float, *, z_min: float, z_max: float, alpha: int) -> int:
     span = max(float(z_max) - float(z_min), 1e-4)
     normalized = float(np.clip((float(z) - float(z_min)) / span, 0.0, 1.0))
-    opacity = 1.0 - ((1.0 - MIN_HEIGHT_OPACITY) * normalized)
+    opacity = 1.0 - ((1.0 - MIN_TRAJECTORY_OPACITY) * normalized)
     return int(round(float(alpha) * opacity))
+
+
+def _time_alpha(step_index: int, *, step_count: int, alpha: int) -> int:
+    if int(step_count) <= 1:
+        return int(alpha)
+    normalized = float(np.clip(float(step_index) / float(max(1, step_count - 1)), 0.0, 1.0))
+    opacity = MIN_TRAJECTORY_OPACITY + ((1.0 - MIN_TRAJECTORY_OPACITY) * normalized)
+    return int(round(float(alpha) * opacity))
+
+
+def _resolve_alpha(
+    *,
+    alpha_mode: str,
+    alpha: int,
+    z_value: float,
+    z_min: float,
+    z_max: float,
+    step_index: int,
+    step_count: int,
+) -> int:
+    if alpha_mode == "time":
+        return _time_alpha(step_index, step_count=step_count, alpha=alpha)
+    return _height_alpha(z_value, z_min=z_min, z_max=z_max, alpha=alpha)
 
 
 def _map_projected_point(
@@ -127,16 +150,16 @@ def _line_color(phase: str, alpha: int) -> tuple[int, int, int, int]:
 
 def _marker_events(
     attempt: OnlineInterventionAttempt,
-) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
-    pickup_attempts: list[np.ndarray] = []
-    grasped_points: list[np.ndarray] = []
-    releases: list[np.ndarray] = []
+) -> tuple[list[tuple[np.ndarray, int]], list[tuple[np.ndarray, int]], list[tuple[np.ndarray, int]]]:
+    pickup_attempts: list[tuple[np.ndarray, int]] = []
+    grasped_points: list[tuple[np.ndarray, int]] = []
+    releases: list[tuple[np.ndarray, int]] = []
     previous_step = None
-    for step in attempt.trajectory:
+    for step_idx, step in enumerate(attempt.trajectory):
         if float(step.gripper_action) > GRIPPER_CLOSE_THRESHOLD and not bool(step.stone_grasped):
-            pickup_attempts.append(np.asarray(step.eef_xyz, dtype=np.float32))
+            pickup_attempts.append((np.asarray(step.eef_xyz, dtype=np.float32), int(step_idx)))
         if bool(step.stone_grasped):
-            grasped_points.append(np.asarray(step.eef_xyz, dtype=np.float32))
+            grasped_points.append((np.asarray(step.eef_xyz, dtype=np.float32), int(step_idx)))
         release_now = False
         if previous_step is not None:
             release_now = (bool(previous_step.stone_grasped) and not bool(step.stone_grasped)) or (
@@ -145,7 +168,7 @@ def _marker_events(
         elif bool(step.move_committed):
             release_now = True
         if release_now:
-            releases.append(np.asarray(step.eef_xyz, dtype=np.float32))
+            releases.append((np.asarray(step.eef_xyz, dtype=np.float32), int(step_idx)))
         previous_step = step
     return pickup_attempts, grasped_points, releases
 
@@ -201,11 +224,21 @@ def _draw_attempt_markers(
     z_min: float,
     z_max: float,
     alpha: int,
+    alpha_mode: str,
 ) -> None:
     pickup_attempts, grasped_points, releases = _marker_events(attempt)
+    step_count = max(1, len(attempt.trajectory))
 
-    for xyz in pickup_attempts:
-        marker_alpha = _height_alpha(float(np.asarray(xyz, dtype=np.float32)[2]), z_min=z_min, z_max=z_max, alpha=alpha)
+    for xyz, step_idx in pickup_attempts:
+        marker_alpha = _resolve_alpha(
+            alpha_mode=alpha_mode,
+            alpha=alpha,
+            z_value=float(np.asarray(xyz, dtype=np.float32)[2]),
+            z_min=z_min,
+            z_max=z_max,
+            step_index=int(step_idx),
+            step_count=step_count,
+        )
         attempt_outline = (MARKER_OUTLINE[0], MARKER_OUTLINE[1], MARKER_OUTLINE[2], marker_alpha)
         attempt_fill = (MARKER_FILL[0], MARKER_FILL[1], MARKER_FILL[2], min(255, marker_alpha + 20))
         _draw_circle_marker(
@@ -221,8 +254,16 @@ def _draw_attempt_markers(
             fill=attempt_fill,
             width=2,
         )
-    for xyz in grasped_points:
-        marker_alpha = _height_alpha(float(np.asarray(xyz, dtype=np.float32)[2]), z_min=z_min, z_max=z_max, alpha=alpha)
+    for xyz, step_idx in grasped_points:
+        marker_alpha = _resolve_alpha(
+            alpha_mode=alpha_mode,
+            alpha=alpha,
+            z_value=float(np.asarray(xyz, dtype=np.float32)[2]),
+            z_min=z_min,
+            z_max=z_max,
+            step_index=int(step_idx),
+            step_count=step_count,
+        )
         solid_fill = (MARKER_SOLID[0], MARKER_SOLID[1], MARKER_SOLID[2], marker_alpha)
         _draw_circle_marker(
             draw,
@@ -237,8 +278,16 @@ def _draw_attempt_markers(
             fill=solid_fill,
             width=1,
         )
-    for xyz in releases:
-        marker_alpha = _height_alpha(float(np.asarray(xyz, dtype=np.float32)[2]), z_min=z_min, z_max=z_max, alpha=alpha)
+    for xyz, step_idx in releases:
+        marker_alpha = _resolve_alpha(
+            alpha_mode=alpha_mode,
+            alpha=alpha,
+            z_value=float(np.asarray(xyz, dtype=np.float32)[2]),
+            z_min=z_min,
+            z_max=z_max,
+            step_index=int(step_idx),
+            step_count=step_count,
+        )
         attempt_fill = (MARKER_FILL[0], MARKER_FILL[1], MARKER_FILL[2], min(255, marker_alpha + 20))
         release_outline = (
             RELEASE_MARKER_OUTLINE[0],
@@ -272,10 +321,12 @@ def _draw_attempt_trajectory(
     z_max: float,
     alpha: int,
     width: int,
+    alpha_mode: str,
 ) -> None:
     if len(attempt.trajectory) < 2:
         return
-    for prev_step, step in zip(attempt.trajectory[:-1], attempt.trajectory[1:]):
+    segment_count = max(1, len(attempt.trajectory) - 1)
+    for segment_idx, (prev_step, step) in enumerate(zip(attempt.trajectory[:-1], attempt.trajectory[1:]), start=1):
         prev_point = _map_projected_point(
             prev_step.eef_xyz,
             box=plot_box,
@@ -291,7 +342,15 @@ def _draw_attempt_trajectory(
         segment_z = 0.5 * (
             float(np.asarray(prev_step.eef_xyz, dtype=np.float32)[2]) + float(np.asarray(step.eef_xyz, dtype=np.float32)[2])
         )
-        segment_alpha = _height_alpha(segment_z, z_min=z_min, z_max=z_max, alpha=alpha)
+        segment_alpha = _resolve_alpha(
+            alpha_mode=alpha_mode,
+            alpha=alpha,
+            z_value=segment_z,
+            z_min=z_min,
+            z_max=z_max,
+            step_index=int(segment_idx),
+            step_count=segment_count + 1,
+        )
         draw.line([prev_point, next_point], fill=_line_color(step.phase, alpha=segment_alpha), width=width)
 
 
@@ -306,6 +365,7 @@ def _draw_plot_panel(
     z_max: float,
     alpha: int,
     width: int,
+    alpha_mode: str,
 ) -> None:
     draw.rounded_rectangle(panel_box, radius=24, fill=PANEL_BG, outline=PANEL_BORDER, width=2)
     plot_box = (
@@ -325,6 +385,7 @@ def _draw_plot_panel(
             z_max=z_max,
             alpha=alpha,
             width=width,
+            alpha_mode=alpha_mode,
         )
     for attempt in attempts:
         _draw_attempt_markers(
@@ -336,6 +397,7 @@ def _draw_plot_panel(
             z_min=z_min,
             z_max=z_max,
             alpha=min(255, alpha + 36),
+            alpha_mode=alpha_mode,
         )
 
 
@@ -383,9 +445,14 @@ def _draw_legend_marker(
 def export_online_intervention_report_png(
     report: OnlineInterventionReport,
     output_path: Path,
+    *,
+    trajectory_alpha_mode: str = "height",
 ) -> Path:
     output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    alpha_mode = str(trajectory_alpha_mode).strip().lower()
+    if alpha_mode not in {"height", "time"}:
+        raise ValueError(f"unsupported trajectory alpha mode: {trajectory_alpha_mode}")
 
     canvas_w = 2200
     canvas_h = 1200
@@ -425,6 +492,7 @@ def export_online_intervention_report_png(
         z_max=z_max,
         alpha=240,
         width=7,
+        alpha_mode=alpha_mode,
     )
     _draw_plot_panel(
         draw,
@@ -436,6 +504,7 @@ def export_online_intervention_report_png(
         z_max=z_max,
         alpha=112,
         width=6,
+        alpha_mode=alpha_mode,
     )
 
     legend_font = _load_font(32)

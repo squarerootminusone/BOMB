@@ -42,8 +42,12 @@ The report layout stays publication-style:
 
 The plotted trajectory is the arm / end-effector path shown in a true top-down
 `x,y` view. Height is no longer mapped into image position. Instead, `z`
-controls trace opacity: the path is most opaque near table level and fades to
-30% opacity at the highest point reached in the rollout.
+controls trace opacity by default: the path is most opaque near table level and
+fades to 30% opacity at the highest point reached in the rollout.
+
+If you prefer a temporal fade instead of a height fade, pass
+`--time-trajectory-color-degradation`. In that mode older trajectory segments
+are more transparent and newer segments are more opaque.
 
 Each segment is colored by task phase:
 
@@ -136,6 +140,8 @@ The unmasked rollout writes an MP4 by default from the same export command.
 - default video path: `<output-png stem>_baseline.mp4`
 - override with `--baseline-video-output`
 - control playback speed with `--video-fps`
+- each MP4 frame overlays a bright tracking dot on the arm point used for the
+  trajectory plot
 
 The rollout collector already has a frame callback hook, so baseline frames are
 streamed directly to the video writer.

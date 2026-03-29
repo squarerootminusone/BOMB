@@ -57,6 +57,10 @@ from go_vla_benchmark.explainability.reporting_causal import (  # noqa: E402
     _apply_colormap,
     _normalize_restoration_scores,
 )
+from go_vla_benchmark.explainability.reporting_online_interventions import (  # noqa: E402
+    _height_alpha,
+    _time_alpha,
+)
 
 
 class _FakeModelAdapter:
@@ -389,6 +393,10 @@ class _FakeOnlineEnv:
         pose = np.eye(4, dtype=np.float32)
         pose[:3, 3] = np.asarray(stone_xyz, dtype=np.float32)
         return pose
+
+    def _world_to_image_rc(self, xyz: np.ndarray, height: int, width: int) -> tuple[int, int]:
+        del xyz
+        return max(0, height // 2), max(0, width // 2)
 
     def is_active_stone_grasped(self) -> bool:
         return bool(self._state().get("stone_grasped", False))
@@ -1085,6 +1093,14 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 list(range(report.baseline.steps_taken + 1)),
             )
             self.assertEqual(captured_baseline_frames[0][1].shape, (12, 12, 3))
+            self.assertTrue(
+                np.any(
+                    np.all(
+                        captured_baseline_frames[0][1] == np.asarray([0, 255, 255], dtype=np.uint8),
+                        axis=-1,
+                    )
+                )
+            )
             self.assertTrue(report.baseline.ever_grasped)
             self.assertTrue(report.baseline.ever_moved_puck)
             self.assertTrue(report.baseline.ever_released)
@@ -1108,6 +1124,13 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             png_path = tmp_path / "online_task_report.png"
             export_online_intervention_report_png(report=report, output_path=png_path)
             self.assertTrue(png_path.is_file())
+            png_time_path = tmp_path / "online_task_report_time.png"
+            export_online_intervention_report_png(
+                report=report,
+                output_path=png_time_path,
+                trajectory_alpha_mode="time",
+            )
+            self.assertTrue(png_time_path.is_file())
 
             image = np.asarray(Image.open(png_path))
             self.assertGreater(int(image.shape[0]), 400)
@@ -1116,6 +1139,11 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             self.assertTrue(np.any(np.all(image == np.asarray([196, 67, 64], dtype=np.uint8), axis=-1)))
             self.assertTrue(np.any(np.all(image == np.asarray([28, 35, 44], dtype=np.uint8), axis=-1)))
             self.assertTrue(np.any(np.all(image == np.asarray([150, 55, 52], dtype=np.uint8), axis=-1)))
+            self.assertLess(_time_alpha(0, step_count=5, alpha=240), _time_alpha(4, step_count=5, alpha=240))
+            self.assertNotEqual(
+                _height_alpha(0.90, z_min=0.80, z_max=0.95, alpha=240),
+                _time_alpha(1, step_count=5, alpha=240),
+            )
 
     def test_infer_online_task_phase_is_monotonic(self) -> None:
         source_xyz = np.asarray([0.0, 0.0, 0.8], dtype=np.float32)
