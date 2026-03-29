@@ -20,6 +20,7 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     CounterfactualEdit,
     EpisodeClip,
     EpisodeInterventionTrace,
+    collect_online_intervention_report,
     collect_episode_causal_traces,
     collect_episode_intervention_traces,
     collect_online_text_mask_report,
@@ -28,6 +29,7 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     InterventionScan,
     InterventionStepTrace,
     InterventionTraceBundle,
+    PatchMaskCandidateSpec,
     collect_episode_traces,
     causal_trace_manifest,
     export_causal_localization_report,
@@ -44,11 +46,13 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     save_causal_trace_file,
     save_intervention_trace_file,
     save_trace_file,
+    select_online_intervention_mask_from_reference,
     select_top_k_traces_preserving_order,
     TextMaskCandidateSpec,
     trace_manifest,
 )
 from go_vla_benchmark.explainability.go_hdf5 import GoHDF5DatasetAdapter  # noqa: E402
+from go_vla_benchmark.common import GoResetOptions  # noqa: E402
 from go_vla_benchmark.explainability.reporting_causal import (  # noqa: E402
     _apply_colormap,
     _normalize_restoration_scores,
@@ -287,8 +291,10 @@ class _FakeOnlinePrediction:
         self.pred_action_xyzg = np.asarray(action, dtype=np.float32)
 
 
-class _FakeOnlinePolicy:
-    prompt_style = "openvla"
+class _FakeOnlinePolicy(_FakeInterventionAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_images: list[np.ndarray] = []
 
     def predict_step(
         self,
@@ -296,7 +302,8 @@ class _FakeOnlinePolicy:
         instruction: str,
         masked_instruction_positions: np.ndarray | None = None,
     ) -> _FakeOnlinePrediction:
-        del image, instruction
+        self.seen_images.append(np.asarray(image, dtype=np.uint8).copy())
+        del instruction
         if masked_instruction_positions is None:
             return _FakeOnlinePrediction([0.02, 0.01, -0.01, -1.0])
         return _FakeOnlinePrediction([0.01, 0.02, 0.00, 1.0])
@@ -327,6 +334,7 @@ class _FakeOnlineEnv:
         self._scenario_index = -1
         self._step_index = 0
         self._current: dict[str, object] | None = None
+        self.reset_options_history: list[GoResetOptions | None] = []
 
     def _state(self) -> dict[str, object]:
         if self._current is None:
@@ -336,10 +344,12 @@ class _FakeOnlineEnv:
         return self._current["steps"][self._step_index - 1]  # type: ignore[index]
 
     def _observation(self) -> dict[str, np.ndarray]:
-        return {"agentview_image": np.full((12, 12, 3), fill_value=40, dtype=np.uint8)}
+        image = np.full((12, 12, 3), fill_value=40, dtype=np.uint8)
+        image[:6, :6] = 80
+        return {"agentview_image": image}
 
     def reset(self, options=None):
-        del options
+        self.reset_options_history.append(options)
         self._scenario_index += 1
         self._current = self._scenarios[self._scenario_index]
         self._step_index = 0
@@ -411,8 +421,16 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             compression="gzip",
         )
         board_state = np.zeros((2, 5, 5, 3), dtype=np.float32)
+        board_state[0, 0, 0, 1] = 1.0
+        board_state[0, 1, 1, 2] = 1.0
+        board_state[1, 0, 0, 1] = 1.0
+        board_state[1, 1, 1, 2] = 1.0
         board_state[1, 2, 3, 1] = 1.0
         demo.create_dataset("obs/board_state", data=board_state)
+        move_history = np.full((2, 50), fill_value=-1, dtype=np.int32)
+        move_history[:, 0] = 0
+        move_history[:, 1] = 6
+        demo.create_dataset("obs/move_history", data=move_history)
         demo.create_dataset("stone_color", data=np.bytes_("black"))
 
     def _write_dataset(self, dataset_path: Path) -> None:
@@ -441,6 +459,33 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             )
 
             self.assertEqual([clip.demo_key for clip in clips], ["demo_2", "demo_0", "demo_1"])
+
+    def test_hdf5_adapter_loads_online_demo_specs_in_dataset_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            dataset_path = tmp_path / "source_go.hdf5"
+
+            with h5py.File(dataset_path, "w") as handle:
+                data = handle.create_group("data", track_order=True)
+                self._create_demo(data, "demo_2", fill_value=20)
+                self._create_demo(data, "demo_0", fill_value=60)
+                self._create_demo(data, "demo_1", fill_value=100)
+
+            specs = GoHDF5DatasetAdapter().load_online_demo_specs(
+                dataset_path=dataset_path,
+                demos=None,
+                start=0,
+                num_demos=0,
+                stride=1,
+                reference_step=0,
+            )
+
+            self.assertEqual([spec.demo_key for spec in specs], ["demo_2", "demo_0", "demo_1"])
+            self.assertEqual(specs[0].target_row, 2)
+            self.assertEqual(specs[0].target_col, 3)
+            self.assertEqual(specs[0].opening_moves, 2)
+            np.testing.assert_array_equal(specs[0].opening_move_history, np.asarray([0, 6], dtype=np.int32))
+            self.assertEqual(specs[1].reference_image.shape, (4, 4, 3))
 
     def test_select_top_k_traces_preserves_input_order(self) -> None:
         traces = [
@@ -1069,6 +1114,8 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             self.assertGreater(int(image.shape[1]), 900)
             self.assertTrue(np.any(np.all(image == np.asarray([45, 91, 188], dtype=np.uint8), axis=-1)))
             self.assertTrue(np.any(np.all(image == np.asarray([196, 67, 64], dtype=np.uint8), axis=-1)))
+            self.assertTrue(np.any(np.all(image == np.asarray([28, 35, 44], dtype=np.uint8), axis=-1)))
+            self.assertTrue(np.any(np.all(image == np.asarray([150, 55, 52], dtype=np.uint8), axis=-1)))
 
     def test_infer_online_task_phase_is_monotonic(self) -> None:
         source_xyz = np.asarray([0.0, 0.0, 0.8], dtype=np.float32)
@@ -1123,6 +1170,119 @@ class ExplainabilityPipelineTest(unittest.TestCase):
         self.assertEqual(phase1, "move_to_puck")
         self.assertEqual(phase2, "pick_up_puck")
         self.assertEqual(phase3, "move_puck")
+
+    def test_select_online_patch_mask_from_reference(self) -> None:
+        policy = _FakeOnlinePolicy()
+        mask = select_online_intervention_mask_from_reference(
+            policy=policy,
+            reference_image=np.full((4, 4, 3), fill_value=80, dtype=np.uint8),
+            instruction="Place a black stone on the Go board at row 3, column 4.",
+            intervention_kind="patch",
+        )
+        self.assertIsInstance(mask, PatchMaskCandidateSpec)
+        assert isinstance(mask, PatchMaskCandidateSpec)
+        self.assertEqual(mask.index, 0)
+        self.assertEqual(mask.patch_row, 0)
+        self.assertEqual(mask.patch_col, 0)
+        self.assertEqual(mask.grid_side, 2)
+
+    def test_collect_online_patch_report_uses_patch_mask_and_opening_history(self) -> None:
+        scenarios = [
+            {
+                "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                "initial": {
+                    "eef_xyz": np.asarray([-0.14, -0.09, 0.95], dtype=np.float32),
+                    "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    "stone_grasped": False,
+                    "move_committed": False,
+                },
+                "steps": [
+                    {
+                        "eef_xyz": np.asarray([0.01, -0.12, 0.90], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.02, -0.12, 0.82], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.82], dtype=np.float32),
+                        "stone_grasped": True,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": True,
+                        "done": True,
+                    },
+                ],
+            },
+            {
+                "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                "initial": {
+                    "eef_xyz": np.asarray([-0.14, -0.09, 0.95], dtype=np.float32),
+                    "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    "stone_grasped": False,
+                    "move_committed": False,
+                },
+                "steps": [
+                    {
+                        "eef_xyz": np.asarray([0.00, -0.11, 0.90], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": True,
+                        "done": True,
+                    },
+                ],
+            },
+        ]
+        env = _FakeOnlineEnv(scenarios=scenarios)
+        policy = _FakeOnlinePolicy()
+        patch_mask = PatchMaskCandidateSpec(index=0, label="patch (0, 0)", patch_row=0, patch_col=0, grid_side=2)
+
+        report = collect_online_intervention_report(
+            policy=policy,
+            env_factory=lambda: env,
+            instruction="Place a black stone on the Go board at row 3, column 4.",
+            target_row=3,
+            target_col=4,
+            max_steps=3,
+            masked_attempts=1,
+            checkpoint="/tmp/fake-openvla",
+            intervention_kind="patch",
+            mask=patch_mask,
+            reset_options=GoResetOptions(
+                opening_moves=2,
+                opening_move_history=np.asarray([0, 6], dtype=np.int32),
+                target_row=3,
+                target_col=4,
+                stone_color="black",
+            ),
+        )
+
+        self.assertEqual(report.intervention_kind, "patch")
+        self.assertIsNone(report.text_mask)
+        self.assertIsNotNone(report.patch_mask)
+        assert report.patch_mask is not None
+        self.assertEqual(report.patch_mask.index, 0)
+        first_unmasked_image = policy.seen_images[0]
+        first_masked_image = policy.seen_images[report.baseline.steps_taken]
+        self.assertFalse(np.array_equal(first_masked_image, first_unmasked_image))
+        self.assertEqual(len(env.reset_options_history), 2)
+        self.assertEqual(env.reset_options_history[0].opening_move_history.tolist(), [0, 6])
+        self.assertEqual(env.reset_options_history[1].opening_move_history.tolist(), [0, 6])
 
     def test_collect_and_roundtrip_causal_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

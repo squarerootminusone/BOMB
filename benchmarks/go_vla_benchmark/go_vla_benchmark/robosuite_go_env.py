@@ -59,6 +59,10 @@ class _OpenSpielGoLogic:
     def is_game_over(self) -> bool:
         return bool(self._state.is_terminal())
 
+    @property
+    def current_player(self) -> int:
+        return int(self._state.current_player())
+
     def legal_actions(self) -> List[int]:
         return [int(a) for a in self._state.legal_actions()]
 
@@ -1307,6 +1311,21 @@ class GoRobosuiteBenchmarkEnv:
                     )
         return applied
 
+    def replay_opening_move_history(self, move_history: np.ndarray) -> int:
+        history = np.asarray(move_history, dtype=np.int32).reshape(-1)
+        applied = 0
+        for action_int in history.tolist():
+            if int(action_int) < 0 or self._logic.is_game_over:
+                break
+            if not self._apply_single_player_move(
+                player_id=self._logic.current_player,
+                action_int=int(action_int),
+                use_active_white_stone=False,
+            ):
+                break
+            applied += 1
+        return applied
+
     def _set_target_pose_from_rc(self, row: int, col: int) -> None:
         target_xyz = self._intersection_xyz[row, col].copy()
         self._target_pose = self._pose_from_xyz(target_xyz)
@@ -1364,7 +1383,10 @@ class GoRobosuiteBenchmarkEnv:
         else:
             self._stone_color = self._rng.choice(["black", "white"])
 
-        self.seed_random_opening(options.opening_moves)
+        if options.opening_move_history is not None:
+            self.replay_opening_move_history(options.opening_move_history)
+        else:
+            self.seed_random_opening(options.opening_moves)
         # Settle stones after opening placement; high joint damping (0.1)
         # and contact params allow fast convergence.
         self._settle_stones(num_steps=200)
@@ -1394,6 +1416,9 @@ class GoRobosuiteBenchmarkEnv:
     def queue_reset_options(self, options: GoResetOptions) -> None:
         self._queued_reset_options = GoResetOptions(
             opening_moves=int(options.opening_moves),
+            opening_move_history=None
+            if options.opening_move_history is None
+            else np.asarray(options.opening_move_history, dtype=np.int32).copy(),
             target_row=options.target_row,
             target_col=options.target_col,
             stone_color=options.stone_color,

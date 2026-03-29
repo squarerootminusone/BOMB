@@ -181,35 +181,14 @@ for each RLDS-selected frame:
 
 ## Online Task-Level Report
 
-The offline stepwise intervention report above is still useful, but there is now
-an online task-level report path that reruns the actual simulator and measures
-how masking changes the full rollout rather than a single predicted action.
+The simulator-rerun trajectory intervention path has grown beyond a short
+appendix here. Its documentation now lives in
+[`Trajectory_intervention.md`](./Trajectory_intervention.md).
 
-Current scope:
+That document covers:
 
-- text masking only
-- one baseline rollout on the left
-- five masked attempts on the right
-- each rollout capped at `200` simulator steps
-- trajectory segments colored by task phase:
-  - move to puck
-  - pick up puck
-  - move puck
-  - drop puck
-
-The masking target is the final placement phrase for the requested board cell
-(for example `row 3, column 4`, `column 4, row 3`, or `(3, 4)` depending on the
-instruction wording).
-
-Run it with:
-
-```bash
-python benchmarks/go_vla_benchmark/scripts/export_openvla_online_intervention_report.py \
-  --checkpoint /abs/path/to/openvla-checkpoint \
-  --output-png benchmarks/go_vla_benchmark/data/interventions/online_task_report.png \
-  --summary-output benchmarks/go_vla_benchmark/data/interventions/online_task_report.json \
-  --target-row 3 \
-  --target-col 4 \
-  --attempts 5 \
-  --max-steps 200
-```
+- dataset-driven text and patch mask selection from the Go HDF5 demos
+- simulator reset from recorded demo opening history
+- publication PNG rendering and rollout markers
+- baseline MP4 export
+- dataset-order multi-demo export behavior

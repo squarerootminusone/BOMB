@@ -311,6 +311,44 @@ class GoJacoBenchmarkEnv:
                 applied += 1
         return applied
 
+    def _apply_opening_history_action(self, action_int: int) -> bool:
+        task = self._dm_env.task
+        current_player = int(task._game_logic.open_spiel_state.current_player())
+        row, col, is_pass = self._decode_action_int(int(action_int))
+        go_action = go_logic.GoMarkerAction(row=row, col=col, pass_action=is_pass)
+        valid_move = task._game_logic.apply(player=current_player, action=go_action)
+        if not valid_move:
+            return False
+
+        if not is_pass:
+            marker_pos = task._board.sample_pos_inside_touch_sensor(
+                physics=self.physics,
+                random_state=self._rng,
+                row=row,
+                col=col,
+            )
+            task._markers.mark(
+                physics=self.physics,
+                player_id=current_player,
+                pos=marker_pos,
+                bpos=(row, col),
+            )
+        self._redraw_markers()
+        self._carried_marker_site = None
+        self.physics.forward()
+        return True
+
+    def replay_opening_move_history(self, move_history: np.ndarray) -> int:
+        history = np.asarray(move_history, dtype=np.int32).reshape(-1)
+        applied = 0
+        for action_int in history.tolist():
+            if int(action_int) < 0 or self._dm_env.task._game_logic.is_game_over:
+                break
+            if not self._apply_opening_history_action(int(action_int)):
+                break
+            applied += 1
+        return applied
+
     def _set_target_pose_from_rc(self, row: int, col: int) -> None:
         target_xyz = self._intersection_xyz[row, col].copy()
         target_xyz[2] += 0.003
@@ -358,7 +396,10 @@ class GoJacoBenchmarkEnv:
         self._move_committed = False
         self._success_step = None
 
-        self.seed_random_opening(options.opening_moves)
+        if options.opening_move_history is not None:
+            self.replay_opening_move_history(options.opening_move_history)
+        else:
+            self.seed_random_opening(options.opening_moves)
 
         if options.target_row is not None and options.target_col is not None:
             self.set_target_intersection(row=options.target_row, col=options.target_col)
@@ -373,8 +414,12 @@ class GoJacoBenchmarkEnv:
         """Apply reset options to the next internal env.reset() call only."""
         self._queued_reset_options = GoResetOptions(
             opening_moves=int(options.opening_moves),
+            opening_move_history=None
+            if options.opening_move_history is None
+            else np.asarray(options.opening_move_history, dtype=np.int32).copy(),
             target_row=options.target_row,
             target_col=options.target_col,
+            stone_color=options.stone_color,
         )
 
     def _nearest_intersection(self, eef_xy: np.ndarray) -> Tuple[int, int, float]:

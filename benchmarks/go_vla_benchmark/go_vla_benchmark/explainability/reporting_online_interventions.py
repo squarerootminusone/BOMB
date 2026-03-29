@@ -21,6 +21,11 @@ BG_COLOR = (248, 249, 251, 255)
 PANEL_BG = (255, 255, 255, 255)
 PANEL_BORDER = (212, 218, 226, 255)
 LEGEND_TEXT = (32, 40, 52, 255)
+MARKER_OUTLINE = (28, 35, 44, 236)
+MARKER_FILL = (255, 255, 255, 244)
+MARKER_SOLID = (28, 35, 44, 236)
+RELEASE_MARKER_OUTLINE = (150, 55, 52, 236)
+GRIPPER_CLOSE_THRESHOLD = 0.25
 _ISO_PROJECTION = np.asarray(
     [
         [0.86, -0.86, 0.0],
@@ -104,6 +109,136 @@ def _line_color(phase: str, alpha: int) -> tuple[int, int, int, int]:
     return (int(rgb[0]), int(rgb[1]), int(rgb[2]), int(alpha))
 
 
+def _marker_events(
+    attempt: OnlineInterventionAttempt,
+) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray]]:
+    pickup_attempts: list[np.ndarray] = []
+    grasped_points: list[np.ndarray] = []
+    releases: list[np.ndarray] = []
+    previous_step = None
+    for step in attempt.trajectory:
+        if float(step.gripper_action) > GRIPPER_CLOSE_THRESHOLD and not bool(step.stone_grasped):
+            pickup_attempts.append(np.asarray(step.eef_xyz, dtype=np.float32))
+        if bool(step.stone_grasped):
+            grasped_points.append(np.asarray(step.eef_xyz, dtype=np.float32))
+        release_now = False
+        if previous_step is not None:
+            release_now = (bool(previous_step.stone_grasped) and not bool(step.stone_grasped)) or (
+                bool(step.move_committed) and not bool(previous_step.move_committed)
+            )
+        elif bool(step.move_committed):
+            release_now = True
+        if release_now:
+            releases.append(np.asarray(step.eef_xyz, dtype=np.float32))
+        previous_step = step
+    return pickup_attempts, grasped_points, releases
+
+
+def _draw_circle_marker(
+    draw: ImageDraw.ImageDraw,
+    *,
+    center: tuple[int, int],
+    radius: int,
+    outline: tuple[int, int, int, int],
+    fill: tuple[int, int, int, int],
+    width: int,
+) -> None:
+    draw.ellipse(
+        (
+            center[0] - radius,
+            center[1] - radius,
+            center[0] + radius,
+            center[1] + radius,
+        ),
+        outline=outline,
+        fill=fill,
+        width=width,
+    )
+
+
+def _draw_diamond_marker(
+    draw: ImageDraw.ImageDraw,
+    *,
+    center: tuple[int, int],
+    radius: int,
+    outline: tuple[int, int, int, int],
+    fill: tuple[int, int, int, int],
+    width: int,
+) -> None:
+    points = [
+        (center[0], center[1] - radius),
+        (center[0] + radius, center[1]),
+        (center[0], center[1] + radius),
+        (center[0] - radius, center[1]),
+    ]
+    draw.polygon(points, fill=fill)
+    draw.line(points + [points[0]], fill=outline, width=width)
+
+
+def _draw_attempt_markers(
+    draw: ImageDraw.ImageDraw,
+    *,
+    attempt: OnlineInterventionAttempt,
+    plot_box: tuple[int, int, int, int],
+    projection_min: np.ndarray,
+    projection_max: np.ndarray,
+    alpha: int,
+) -> None:
+    pickup_attempts, grasped_points, releases = _marker_events(attempt)
+    attempt_outline = (MARKER_OUTLINE[0], MARKER_OUTLINE[1], MARKER_OUTLINE[2], alpha)
+    attempt_fill = (MARKER_FILL[0], MARKER_FILL[1], MARKER_FILL[2], min(255, alpha + 20))
+    solid_fill = (MARKER_SOLID[0], MARKER_SOLID[1], MARKER_SOLID[2], alpha)
+    release_outline = (
+        RELEASE_MARKER_OUTLINE[0],
+        RELEASE_MARKER_OUTLINE[1],
+        RELEASE_MARKER_OUTLINE[2],
+        alpha,
+    )
+
+    for xyz in pickup_attempts:
+        _draw_circle_marker(
+            draw,
+            center=_map_projected_point(
+                xyz,
+                box=plot_box,
+                projection_min=projection_min,
+                projection_max=projection_max,
+            ),
+            radius=8,
+            outline=attempt_outline,
+            fill=attempt_fill,
+            width=2,
+        )
+    for xyz in grasped_points:
+        _draw_circle_marker(
+            draw,
+            center=_map_projected_point(
+                xyz,
+                box=plot_box,
+                projection_min=projection_min,
+                projection_max=projection_max,
+            ),
+            radius=6,
+            outline=solid_fill,
+            fill=solid_fill,
+            width=1,
+        )
+    for xyz in releases:
+        _draw_diamond_marker(
+            draw,
+            center=_map_projected_point(
+                xyz,
+                box=plot_box,
+                projection_min=projection_min,
+                projection_max=projection_max,
+            ),
+            radius=9,
+            outline=release_outline,
+            fill=attempt_fill,
+            width=2,
+        )
+
+
 def _draw_attempt_trajectory(
     draw: ImageDraw.ImageDraw,
     *,
@@ -159,11 +294,56 @@ def _draw_plot_panel(
             alpha=alpha,
             width=width,
         )
+    for attempt in attempts:
+        _draw_attempt_markers(
+            draw,
+            attempt=attempt,
+            plot_box=plot_box,
+            projection_min=projection_min,
+            projection_max=projection_max,
+            alpha=min(255, alpha + 36),
+        )
 
 
 def _legend_items() -> Iterable[tuple[str, tuple[int, int, int]]]:
     for phase in TASK_PHASE_ORDER:
         yield TASK_PHASE_LABELS[phase], TASK_PHASE_COLORS[phase]
+
+
+def _draw_legend_marker(
+    draw: ImageDraw.ImageDraw,
+    *,
+    kind: str,
+    center: tuple[int, int],
+) -> None:
+    if kind == "pickup_attempt":
+        _draw_circle_marker(
+            draw,
+            center=center,
+            radius=9,
+            outline=MARKER_OUTLINE,
+            fill=MARKER_FILL,
+            width=2,
+        )
+        return
+    if kind == "grasp_hold":
+        _draw_circle_marker(
+            draw,
+            center=center,
+            radius=7,
+            outline=MARKER_SOLID,
+            fill=MARKER_SOLID,
+            width=1,
+        )
+        return
+    _draw_diamond_marker(
+        draw,
+        center=center,
+        radius=10,
+        outline=RELEASE_MARKER_OUTLINE,
+        fill=MARKER_FILL,
+        width=2,
+    )
 
 
 def export_online_intervention_report_png(
@@ -179,7 +359,7 @@ def export_online_intervention_report_png(
     margin_top = 50
     margin_bottom = 46
     panel_gap = 40
-    legend_h = 132
+    legend_h = 190
     panel_h = canvas_h - margin_top - margin_bottom - legend_h
     panel_w = int((canvas_w - (2 * margin_x) - panel_gap) / 2)
 
@@ -220,7 +400,7 @@ def export_online_intervention_report_png(
     )
 
     legend_font = _load_font(32)
-    legend_y = canvas_h - legend_h + 34
+    legend_y = canvas_h - legend_h + 26
     legend_x = margin_x + 10
     swatch_w = 78
     swatch_gap = 26
@@ -234,6 +414,20 @@ def export_online_intervention_report_png(
         draw.text((legend_x + swatch_w + swatch_gap, legend_y), label, fill=LEGEND_TEXT, font=legend_font)
         text_w, _ = _text_size(draw, label, font=legend_font)
         legend_x += swatch_w + swatch_gap + text_w + item_gap
+
+    marker_font = _load_font(30)
+    marker_y = legend_y + 66
+    marker_x = margin_x + 22
+    marker_items = (
+        ("pickup_attempt", "Pickup Attempt"),
+        ("grasp_hold", "Grasped / Hold"),
+        ("release", "Release / Commit"),
+    )
+    for kind, label in marker_items:
+        _draw_legend_marker(draw, kind=kind, center=(marker_x, marker_y + 14))
+        draw.text((marker_x + 28, marker_y), label, fill=LEGEND_TEXT, font=marker_font)
+        text_w, _ = _text_size(draw, label, font=marker_font)
+        marker_x += text_w + 172
 
     image.convert("RGB").save(output_path)
     return output_path

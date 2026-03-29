@@ -1,13 +1,15 @@
-"""Online task-level text-intervention rollouts for the Go benchmark."""
+"""Online task-level intervention rollouts for the Go benchmark."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Protocol
+from typing import Callable, Dict, List, Optional, Protocol, Union
 
 import numpy as np
 
 from ..common import GoResetOptions
+from .core import LocalExplanationStep
+from .interventions import InterventionScan
 from .openvla_adapter import TextMaskCandidateSpec
 
 
@@ -38,6 +40,18 @@ TASK_PHASE_COLORS = {
 _PHASE_INDEX = {phase: idx for idx, phase in enumerate(TASK_PHASE_ORDER)}
 
 
+@dataclass(frozen=True)
+class PatchMaskCandidateSpec:
+    index: int
+    label: str
+    patch_row: int
+    patch_col: int
+    grid_side: int
+
+
+OnlineInterventionMaskSpec = Union[TextMaskCandidateSpec, PatchMaskCandidateSpec]
+
+
 @dataclass
 class OnlineInterventionStep:
     timestep: int
@@ -58,7 +72,7 @@ class OnlineInterventionAttempt:
     title: str
     instruction: str
     masked: bool
-    mask: Optional[TextMaskCandidateSpec]
+    mask: Optional[OnlineInterventionMaskSpec]
     success: bool
     timed_out: bool
     steps_taken: int
@@ -81,11 +95,15 @@ class OnlineInterventionReport:
     checkpoint: Optional[str]
     prompt_style: Optional[str]
     environment_name: str
+    demo_key: Optional[str]
     instruction: str
     target_row: int
     target_col: int
     max_steps: int
-    text_mask: TextMaskCandidateSpec
+    intervention_kind: str
+    reference_frame_index: Optional[int]
+    text_mask: Optional[TextMaskCandidateSpec]
+    patch_mask: Optional[PatchMaskCandidateSpec]
     baseline: OnlineInterventionAttempt
     masked_attempts: List[OnlineInterventionAttempt]
 
@@ -115,6 +133,29 @@ class OnlineInterventionPolicy(Protocol):
         target_col: Optional[int] = None,
     ) -> TextMaskCandidateSpec:
         """Resolve the instruction span to mask for rollout interventions."""
+
+
+class OnlineInterventionReferencePolicy(OnlineInterventionPolicy, Protocol):
+    def explain_step(self, image: np.ndarray, instruction: str) -> LocalExplanationStep:
+        """Run one clean explainability step on the reference image."""
+
+    def patch_occlusion(
+        self,
+        image: np.ndarray,
+        instruction: str,
+        baseline_step: LocalExplanationStep,
+        top_k: int,
+    ) -> InterventionScan:
+        """Score patch occlusions on the reference image."""
+
+    def text_masking(
+        self,
+        image: np.ndarray,
+        instruction: str,
+        baseline_step: LocalExplanationStep,
+        top_k: int,
+    ) -> InterventionScan:
+        """Score text masks on the reference image."""
 
 
 class OnlineInterventionEnv(Protocol):
@@ -159,6 +200,77 @@ def _optional_xyz_from_pose(pose_or_xyz: Optional[np.ndarray]) -> Optional[np.nd
     if pose_or_xyz is None:
         return None
     return _xyz_from_pose(pose_or_xyz)
+
+
+def _apply_patch_mask(image: np.ndarray, patch_mask: PatchMaskCandidateSpec) -> np.ndarray:
+    occluded = np.asarray(image, dtype=np.uint8).copy()
+    grid_side = max(1, int(patch_mask.grid_side))
+    patch_index = int(patch_mask.index)
+    fill_color = np.asarray(np.mean(occluded, axis=(0, 1)), dtype=np.uint8)
+    height, width = occluded.shape[:2]
+    row, col = divmod(patch_index, grid_side)
+    y0 = int(round((row / grid_side) * height))
+    y1 = int(round(((row + 1) / grid_side) * height))
+    x0 = int(round((col / grid_side) * width))
+    x1 = int(round(((col + 1) / grid_side) * width))
+    occluded[y0:y1, x0:x1] = fill_color
+    return occluded
+
+
+def _top_patch_mask_from_scan(scan: InterventionScan) -> PatchMaskCandidateSpec:
+    effect_map = np.asarray(scan.effect_map, dtype=np.float32)
+    if effect_map.ndim != 2 or effect_map.shape[0] != effect_map.shape[1]:
+        raise ValueError(f"expected square patch effect map, got {effect_map.shape}")
+    grid_side = int(effect_map.shape[0])
+    if scan.top_candidates:
+        patch_index = int(scan.top_candidates[0].index)
+        label = str(scan.top_candidates[0].label)
+    else:
+        patch_index = int(np.argmax(effect_map.reshape(-1)))
+        row, col = divmod(patch_index, grid_side)
+        label = f"patch ({row}, {col})"
+    patch_row, patch_col = divmod(patch_index, grid_side)
+    return PatchMaskCandidateSpec(
+        index=patch_index,
+        label=label,
+        patch_row=int(patch_row),
+        patch_col=int(patch_col),
+        grid_side=grid_side,
+    )
+
+
+def select_online_intervention_mask_from_reference(
+    *,
+    policy: OnlineInterventionReferencePolicy,
+    reference_image: np.ndarray,
+    instruction: str,
+    intervention_kind: str,
+) -> OnlineInterventionMaskSpec:
+    baseline_step = policy.explain_step(reference_image, instruction)
+    kind = str(intervention_kind).strip().lower()
+    if kind == "patch":
+        patch_scan = policy.patch_occlusion(
+            image=reference_image,
+            instruction=instruction,
+            baseline_step=baseline_step,
+            top_k=1,
+        )
+        return _top_patch_mask_from_scan(patch_scan)
+
+    if kind != "text":
+        raise ValueError(f"unsupported intervention kind: {intervention_kind}")
+
+    text_scan = policy.text_masking(
+        image=reference_image,
+        instruction=instruction,
+        baseline_step=baseline_step,
+        top_k=1,
+    )
+    if text_scan.top_candidates:
+        text_index = int(text_scan.top_candidates[0].index)
+    else:
+        text_index = int(np.argmax(np.asarray(text_scan.effect_map, dtype=np.float32).reshape(-1)))
+    return policy.resolve_text_mask_candidate(instruction, index=text_index)
 
 
 @dataclass
@@ -321,7 +433,7 @@ def _rollout_attempt(
     target_row: int,
     target_col: int,
     max_steps: int,
-    mask: Optional[TextMaskCandidateSpec],
+    mask: Optional[OnlineInterventionMaskSpec],
     attempt_index: int,
     title: str,
     reset_options: GoResetOptions,
@@ -356,14 +468,18 @@ def _rollout_attempt(
     ]
 
     masked_positions = None
-    if mask is not None:
+    patch_mask = None
+    if isinstance(mask, TextMaskCandidateSpec):
         masked_positions = np.asarray(mask.prompt_token_positions, dtype=np.int64).reshape(-1)
+    elif isinstance(mask, PatchMaskCandidateSpec):
+        patch_mask = mask
 
     last_info: Dict[str, object] = {"move_committed": False}
     for timestep in range(max(0, int(max_steps))):
         image = np.asarray(obs["agentview_image"], dtype=np.uint8)
+        policy_image = image if patch_mask is None else _apply_patch_mask(image=image, patch_mask=patch_mask)
         predicted = policy.predict_step(
-            image=image,
+            image=policy_image,
             instruction=instruction,
             masked_instruction_positions=masked_positions,
         )
@@ -431,6 +547,84 @@ def _rollout_attempt(
     )
 
 
+def collect_online_intervention_report(
+    *,
+    policy: OnlineInterventionPolicy,
+    env_factory: Callable[[], OnlineInterventionEnv],
+    instruction: str,
+    target_row: int,
+    target_col: int,
+    max_steps: int = 200,
+    masked_attempts: int = 5,
+    opening_moves: int = 0,
+    stone_color: Optional[str] = "black",
+    checkpoint: Optional[str] = None,
+    intervention_kind: str = "text",
+    mask: Optional[OnlineInterventionMaskSpec] = None,
+    reset_options: Optional[GoResetOptions] = None,
+    demo_key: Optional[str] = None,
+    reference_frame_index: Optional[int] = None,
+    baseline_frame_callback: Optional[Callable[[np.ndarray, int], None]] = None,
+) -> OnlineInterventionReport:
+    env = env_factory()
+    try:
+        resolved_reset_options = reset_options
+        if resolved_reset_options is None:
+            resolved_reset_options = GoResetOptions(
+                opening_moves=int(opening_moves),
+                target_row=int(target_row),
+                target_col=int(target_col),
+                stone_color=stone_color,
+            )
+        baseline = _rollout_attempt(
+            env=env,
+            policy=policy,
+            instruction=instruction,
+            target_row=target_row,
+            target_col=target_col,
+            max_steps=max_steps,
+            mask=None,
+            attempt_index=0,
+            title="No Mask",
+            reset_options=resolved_reset_options,
+            frame_callback=baseline_frame_callback,
+        )
+        masked_runs = [
+            _rollout_attempt(
+                env=env,
+                policy=policy,
+                instruction=instruction,
+                target_row=target_row,
+                target_col=target_col,
+                max_steps=max_steps,
+                mask=mask,
+                attempt_index=attempt_idx + 1,
+                title=f"Mask Attempt {attempt_idx + 1}",
+                reset_options=resolved_reset_options,
+                frame_callback=None,
+            )
+            for attempt_idx in range(max(0, int(masked_attempts)))
+        ]
+        return OnlineInterventionReport(
+            checkpoint=checkpoint,
+            prompt_style=getattr(policy, "prompt_style", None),
+            environment_name=str(getattr(env, "environment_name", type(env).__name__)),
+            demo_key=None if demo_key is None else str(demo_key),
+            instruction=str(instruction),
+            target_row=int(target_row),
+            target_col=int(target_col),
+            max_steps=int(max_steps),
+            intervention_kind=str(intervention_kind),
+            reference_frame_index=None if reference_frame_index is None else int(reference_frame_index),
+            text_mask=mask if isinstance(mask, TextMaskCandidateSpec) else None,
+            patch_mask=mask if isinstance(mask, PatchMaskCandidateSpec) else None,
+            baseline=baseline,
+            masked_attempts=masked_runs,
+        )
+    finally:
+        env.close()
+
+
 def collect_online_text_mask_report(
     *,
     policy: OnlineInterventionPolicy,
@@ -447,68 +641,42 @@ def collect_online_text_mask_report(
     mask_label: Optional[str] = None,
     baseline_frame_callback: Optional[Callable[[np.ndarray, int], None]] = None,
 ) -> OnlineInterventionReport:
-    env = env_factory()
-    try:
-        resolved_mask = policy.resolve_text_mask_candidate(
-            instruction,
-            index=mask_index,
-            label=mask_label,
-            target_row=target_row,
-            target_col=target_col,
-        )
-        reset_options = GoResetOptions(
-            opening_moves=int(opening_moves),
-            target_row=int(target_row),
-            target_col=int(target_col),
-            stone_color=stone_color,
-        )
-        baseline = _rollout_attempt(
-            env=env,
-            policy=policy,
-            instruction=instruction,
-            target_row=target_row,
-            target_col=target_col,
-            max_steps=max_steps,
-            mask=None,
-            attempt_index=0,
-            title="No Mask",
-            reset_options=reset_options,
-            frame_callback=baseline_frame_callback,
-        )
-        masked_runs = [
-            _rollout_attempt(
-                env=env,
-                policy=policy,
-                instruction=instruction,
-                target_row=target_row,
-                target_col=target_col,
-                max_steps=max_steps,
-                mask=resolved_mask,
-                attempt_index=attempt_idx + 1,
-                title=f"Mask Attempt {attempt_idx + 1}",
-                reset_options=reset_options,
-                frame_callback=None,
-            )
-            for attempt_idx in range(max(0, int(masked_attempts)))
-        ]
-        return OnlineInterventionReport(
-            checkpoint=checkpoint,
-            prompt_style=getattr(policy, "prompt_style", None),
-            environment_name=str(getattr(env, "environment_name", type(env).__name__)),
-            instruction=str(instruction),
-            target_row=int(target_row),
-            target_col=int(target_col),
-            max_steps=int(max_steps),
-            text_mask=resolved_mask,
-            baseline=baseline,
-            masked_attempts=masked_runs,
-        )
-    finally:
-        env.close()
+    resolved_mask = policy.resolve_text_mask_candidate(
+        instruction,
+        index=mask_index,
+        label=mask_label,
+        target_row=target_row,
+        target_col=target_col,
+    )
+    return collect_online_intervention_report(
+        policy=policy,
+        env_factory=env_factory,
+        instruction=instruction,
+        target_row=target_row,
+        target_col=target_col,
+        max_steps=max_steps,
+        masked_attempts=masked_attempts,
+        opening_moves=opening_moves,
+        stone_color=stone_color,
+        checkpoint=checkpoint,
+        intervention_kind="text",
+        mask=resolved_mask,
+        baseline_frame_callback=baseline_frame_callback,
+    )
 
 
-def _mask_to_dict(mask: TextMaskCandidateSpec) -> Dict[str, object]:
+def _mask_to_dict(mask: OnlineInterventionMaskSpec) -> Dict[str, object]:
+    if isinstance(mask, PatchMaskCandidateSpec):
+        return {
+            "kind": "patch",
+            "index": int(mask.index),
+            "label": str(mask.label),
+            "patch_row": int(mask.patch_row),
+            "patch_col": int(mask.patch_col),
+            "grid_side": int(mask.grid_side),
+        }
     return {
+        "kind": "text",
         "index": int(mask.index),
         "label": str(mask.label),
         "prompt_token_positions": np.asarray(mask.prompt_token_positions, dtype=np.int64).tolist(),
@@ -566,17 +734,26 @@ def _attempt_to_dict(attempt: OnlineInterventionAttempt) -> Dict[str, object]:
 
 
 def online_text_mask_report_manifest(report: OnlineInterventionReport) -> Dict[str, object]:
-    return {
+    manifest = {
         "trace_format": ONLINE_TASK_INTERVENTION_FORMAT,
         "schema_version": ONLINE_TASK_INTERVENTION_SCHEMA_VERSION,
         "checkpoint": report.checkpoint,
         "prompt_style": report.prompt_style,
         "environment_name": report.environment_name,
+        "demo_key": report.demo_key,
         "instruction": report.instruction,
         "target_row": int(report.target_row),
         "target_col": int(report.target_col),
         "max_steps": int(report.max_steps),
-        "text_mask": _mask_to_dict(report.text_mask),
         "baseline": _attempt_to_dict(report.baseline),
         "masked_attempts": [_attempt_to_dict(attempt) for attempt in report.masked_attempts],
+        "intervention_kind": str(report.intervention_kind),
+        "reference_frame_index": None if report.reference_frame_index is None else int(report.reference_frame_index),
     }
+    manifest["text_mask"] = None if report.text_mask is None else _mask_to_dict(report.text_mask)
+    manifest["patch_mask"] = None if report.patch_mask is None else _mask_to_dict(report.patch_mask)
+    return manifest
+
+
+def online_intervention_report_manifest(report: OnlineInterventionReport) -> Dict[str, object]:
+    return online_text_mask_report_manifest(report)
