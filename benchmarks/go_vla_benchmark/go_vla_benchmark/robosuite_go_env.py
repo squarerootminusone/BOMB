@@ -1412,6 +1412,9 @@ class GoRobosuiteBenchmarkEnv:
             return False
         return bool(self._rs_env.check_stone_grasped(self._active_white_stone_idx))
 
+    def is_active_stone_grasped(self) -> bool:
+        return self._is_active_stone_grasped()
+
     def _build_low_level_action(self, action: np.ndarray) -> np.ndarray:
         action = np.asarray(action, dtype=np.float32).reshape(-1)
         arm_action = np.clip(action[:3], -1.0, 1.0)
@@ -1455,6 +1458,14 @@ class GoRobosuiteBenchmarkEnv:
 
     def get_source_stone_pose(self) -> np.ndarray:
         return self._pose_from_xyz(self._source_xyz.copy())
+
+    def get_task_stone_pose(self) -> Optional[np.ndarray]:
+        stone_idx: Optional[int] = self._active_white_stone_idx
+        if stone_idx is None and self._committed_stone_idx is not None:
+            stone_idx = int(self._committed_stone_idx)
+        if stone_idx is None or int(stone_idx) < 0:
+            return None
+        return self._pose_from_xyz(self._rs_env.get_stone_pos(int(stone_idx)).copy())
 
     def get_board_origin_pose(self) -> np.ndarray:
         center = self._intersection_xyz.mean(axis=(0, 1))

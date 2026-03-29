@@ -13,7 +13,9 @@ sys.path.insert(0, str(REPO_ROOT / "benchmarks" / "go_vla_benchmark"))
 
 from go_vla_benchmark.explainability.openvla_adapter import (  # noqa: E402
     OpenVLAExplainabilityAdapter,
+    TextMaskCandidateSpec,
     _collect_text_mask_spans,
+    _resolve_text_mask_candidate_index,
 )
 
 
@@ -23,12 +25,22 @@ class OpenVLAAdapterTest(unittest.TestCase):
         spans = _collect_text_mask_spans(task_text)
         labels = [label for label, _start, _end in spans]
 
+        self.assertIn("row 4, column 4", labels)
         self.assertIn("black", labels)
         self.assertIn("stone", labels)
         self.assertIn("go board", labels)
         self.assertIn("row 4", labels)
         self.assertIn("column 4", labels)
         self.assertEqual(labels.count("4"), 2)
+
+    def test_collect_text_mask_spans_keeps_column_row_phrase(self) -> None:
+        task_text = "move the stone to column 4, row 3 on the go board"
+        spans = _collect_text_mask_spans(task_text)
+        labels = [label for label, _start, _end in spans]
+
+        self.assertIn("column 4, row 3", labels)
+        self.assertIn("column 4", labels)
+        self.assertIn("row 3", labels)
 
     def test_collect_text_mask_spans_keeps_full_position_phrase(self) -> None:
         task_text = "put a black stone at position (4, 4) on the go board"
@@ -73,6 +85,39 @@ class OpenVLAAdapterTest(unittest.TestCase):
         self.assertEqual(score.target_token_probs.dtype, np.float32)
         np.testing.assert_allclose(score.target_token_probs, expected, rtol=1e-6, atol=1e-6)
         self.assertAlmostEqual(score.sequence_logprob, float(np.log(expected).sum()), places=6)
+
+    def test_resolve_text_mask_candidate_index_prefers_full_target_phrase(self) -> None:
+        candidates = [
+            TextMaskCandidateSpec(
+                index=0,
+                label="row 3",
+                prompt_token_positions=np.asarray([1], dtype=np.int64),
+                task_char_start=0,
+                task_char_end=5,
+            ),
+            TextMaskCandidateSpec(
+                index=1,
+                label="column 4",
+                prompt_token_positions=np.asarray([2], dtype=np.int64),
+                task_char_start=7,
+                task_char_end=15,
+            ),
+            TextMaskCandidateSpec(
+                index=2,
+                label="row 3, column 4",
+                prompt_token_positions=np.asarray([1, 2], dtype=np.int64),
+                task_char_start=0,
+                task_char_end=15,
+            ),
+        ]
+
+        resolved = _resolve_text_mask_candidate_index(
+            candidates,
+            target_row=3,
+            target_col=4,
+        )
+
+        self.assertEqual(resolved, 2)
 
 
 if __name__ == "__main__":

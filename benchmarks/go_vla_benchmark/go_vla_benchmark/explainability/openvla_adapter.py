@@ -17,6 +17,8 @@ from .interventions import CounterfactualEdit, InterventionCandidateEffect, Inte
 BLANK_ACTION_TOKEN_ID = 29871
 _WORD_SPAN_PATTERN = re.compile(r"\b[a-z0-9]+\b", flags=re.IGNORECASE)
 _TEXT_MASK_PATTERNS = (
+    re.compile(r"row\s+\d+\s*,\s*column\s+\d+", flags=re.IGNORECASE),
+    re.compile(r"column\s+\d+\s*,\s*row\s+\d+", flags=re.IGNORECASE),
     re.compile(r"position\s*\(\s*\d+\s*,\s*\d+\s*\)", flags=re.IGNORECASE),
     re.compile(r"\(\s*\d+\s*,\s*\d+\s*\)", flags=re.IGNORECASE),
     re.compile(r"row\s+\d+", flags=re.IGNORECASE),
@@ -37,6 +39,15 @@ class _PromptContext:
 
 @dataclass(frozen=True)
 class _TextMaskCandidate:
+    label: str
+    prompt_token_positions: np.ndarray
+    task_char_start: int
+    task_char_end: int
+
+
+@dataclass(frozen=True)
+class TextMaskCandidateSpec:
+    index: int
     label: str
     prompt_token_positions: np.ndarray
     task_char_start: int
@@ -266,6 +277,78 @@ def _build_text_mask_candidates(
     return candidates
 
 
+def _normalize_mask_label(label: str) -> str:
+    return " ".join(str(label).strip().lower().split())
+
+
+def _preferred_coordinate_labels(target_row: Optional[int], target_col: Optional[int]) -> List[str]:
+    if target_row is None or target_col is None:
+        return []
+    row = int(target_row)
+    col = int(target_col)
+    return [
+        f"row {row}, column {col}",
+        f"column {col}, row {row}",
+        f"position ({row}, {col})",
+        f"({row}, {col})",
+        f"row {row}",
+        f"column {col}",
+    ]
+
+
+def _resolve_text_mask_candidate_index(
+    candidates: Sequence[object],
+    *,
+    index: Optional[int] = None,
+    label: Optional[str] = None,
+    target_row: Optional[int] = None,
+    target_col: Optional[int] = None,
+) -> int:
+    if len(candidates) == 0:
+        raise ValueError("no text mask candidates are available for this instruction")
+
+    if index is not None:
+        resolved = int(index)
+        if 0 <= resolved < len(candidates):
+            return resolved
+        raise IndexError(f"text mask candidate index out of range: {resolved}")
+
+    normalized_labels = [_normalize_mask_label(getattr(candidate, "label")) for candidate in candidates]
+
+    preference_labels: List[str] = []
+    if label is not None:
+        preference_labels.append(_normalize_mask_label(label))
+    for item in _preferred_coordinate_labels(target_row=target_row, target_col=target_col):
+        normalized = _normalize_mask_label(item)
+        if normalized not in preference_labels:
+            preference_labels.append(normalized)
+
+    for preferred_label in preference_labels:
+        for candidate_index, candidate_label in enumerate(normalized_labels):
+            if candidate_label == preferred_label:
+                return candidate_index
+
+    if target_row is not None and target_col is not None:
+        row_fragment = _normalize_mask_label(f"row {int(target_row)}")
+        col_fragment = _normalize_mask_label(f"column {int(target_col)}")
+        coord_fragment = _normalize_mask_label(f"({int(target_row)}, {int(target_col)})")
+        for candidate_index, candidate_label in enumerate(normalized_labels):
+            if (row_fragment in candidate_label and col_fragment in candidate_label) or coord_fragment in candidate_label:
+                return candidate_index
+
+    if label is not None:
+        normalized_label = _normalize_mask_label(label)
+        for candidate_index, candidate_label in enumerate(normalized_labels):
+            if normalized_label in candidate_label or candidate_label in normalized_label:
+                return candidate_index
+
+    available = [str(getattr(candidate, "label")) for candidate in candidates]
+    raise ValueError(
+        "could not resolve a text mask candidate for the requested instruction. "
+        f"Available labels: {available}"
+    )
+
+
 def _extract_hook_tensor(output):
     return output[0] if isinstance(output, tuple) else output
 
@@ -357,6 +440,38 @@ class OpenVLAExplainabilityAdapter:
         )
         self._prompt_cache[cache_key] = context
         return context
+
+    def list_text_mask_candidates(self, instruction: str) -> List[TextMaskCandidateSpec]:
+        prompt_context = self._prompt_context(instruction)
+        return [
+            TextMaskCandidateSpec(
+                index=int(candidate_index),
+                label=str(candidate.label),
+                prompt_token_positions=np.asarray(candidate.prompt_token_positions, dtype=np.int64),
+                task_char_start=int(candidate.task_char_start),
+                task_char_end=int(candidate.task_char_end),
+            )
+            for candidate_index, candidate in enumerate(prompt_context.text_mask_candidates)
+        ]
+
+    def resolve_text_mask_candidate(
+        self,
+        instruction: str,
+        *,
+        index: Optional[int] = None,
+        label: Optional[str] = None,
+        target_row: Optional[int] = None,
+        target_col: Optional[int] = None,
+    ) -> TextMaskCandidateSpec:
+        candidates = self.list_text_mask_candidates(instruction)
+        candidate_index = _resolve_text_mask_candidate_index(
+            candidates,
+            index=index,
+            label=label,
+            target_row=target_row,
+            target_col=target_col,
+        )
+        return candidates[int(candidate_index)]
 
     def _aggregate_attention(
         self,
