@@ -111,12 +111,13 @@ def _deduplicate_indices(
 class Builder(tfds.core.GeneratorBasedBuilder):
     """TFDS builder for Go VLA demonstrations."""
 
-    VERSION = tfds.core.Version("4.0.0")
+    VERSION = tfds.core.Version("5.0.0")
     RELEASE_NOTES = {
         "1.0.0": "Initial release.",
         "2.0.0": "4-DOF actions [dx,dy,dz,gripper] instead of zero-padded 7-DOF.",
         "3.0.0": "8 Hz control, board/lighting randomization, near-duplicate frame removal.",
         "4.0.0": "Explicit train/val splits (last 2 demos held out for validation).",
+        "5.0.0": "Fixed gripper remap bug (was 2*x-1 producing -3, now raw {-1,0,1}). Regenerated from current env.",
     }
 
     def _info(self) -> tfds.core.DatasetInfo:
@@ -204,8 +205,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                 )
 
                 actions_4d = _extract_action_4d(actions_4)
-                # Remap gripper from {0, 1} to {-1, +1} to match LIBERO/OpenVLA convention
-                actions_4d[:, 3] = 2.0 * actions_4d[:, 3] - 1.0
+                # Gripper is already {-1, 0, 1} in HDF5 — no remap needed
                 row, col = _derive_target_from_board_state(board_state)
 
                 # Deduplicate near-identical frames (idle/settling segments)

@@ -88,8 +88,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--unnorm-key", type=str, default="go_vla_dataset")
     p.add_argument("--load-4bit", action="store_true")
     p.add_argument("--fps", type=int, default=30)
-    p.add_argument("--force-on-failure", action="store_true", default=True)
-    p.add_argument("--no-force-on-failure", action="store_false", dest="force_on_failure")
+    p.add_argument("--force-on-failure", action="store_true", default=False)
+    p.add_argument("--force-trajectory", action="store_true", help="use scripted controller instead of VLA")
     p.add_argument("--two-arm", action="store_true")
     p.add_argument("--overlay", action="store_true", default=True)
     p.add_argument("--no-overlay", action="store_false", dest="overlay")
@@ -134,7 +134,7 @@ def main() -> None:
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     rng = np.random.RandomState(args.seed)
 
-    # --- Load model ---
+    # --- Load model (base + LoRA adapter) ---
     print(f"Loading model from {model_path}")
     AutoConfig.register("openvla", OpenVLAConfig)
     AutoImageProcessor.register(OpenVLAConfig, PrismaticImageProcessor)
@@ -147,20 +147,30 @@ def main() -> None:
         load_kwargs["quantization_config"] = BitsAndBytesConfig(
             load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_quant_type="nf4"
         )
-    vla = AutoModelForVision2Seq.from_pretrained(str(model_path), **load_kwargs)
+
+    from peft import PeftModel
+    base_vla = AutoModelForVision2Seq.from_pretrained("openvla/openvla-7b", **load_kwargs)
+    vla = PeftModel.from_pretrained(base_vla, str(model_path))
     if not args.load_4bit:
+        vla = vla.merge_and_unload()
         vla = vla.to(device)
-    stats_path = model_path / "dataset_statistics.json"
-    if stats_path.exists():
-        with open(stats_path) as f:
-            vla.norm_stats = json.load(f)
-        print(f"Loaded norm stats from {stats_path}")
+
+    # Set norm stats on the inner model for PEFT compatibility
+    target = vla
+    if hasattr(target, "base_model"):
+        target = target.base_model
+    if hasattr(target, "model"):
+        target = target.model
+    for sp in [model_path / "dataset_statistics.json"] + [p / "dataset_statistics.json" for p in model_path.parents]:
+        if sp.exists():
+            with open(sp) as f:
+                target.norm_stats = json.load(f)
+            print(f"Loaded norm stats from {sp}")
+            break
     vla.eval()
 
     # --- Create environment ---
-    robot_spec = ["Panda", "Panda"] if args.two_arm else "Panda"
-    env_config = "opposed" if args.two_arm else "default"
-    print(f"Creating environment (two_arm={args.two_arm})")
+    print("Creating environment")
     env = create_benchmark_env(
         environment_name="robosuite_go_5x5_rigid_bodies",
         seed=args.seed,
@@ -172,38 +182,7 @@ def main() -> None:
         render_carried_stone=True,
         render_eef_overlay=False,
         enable_opponent_moves=False,
-        robots=robot_spec if isinstance(robot_spec, list) else None,
-        robot="Panda",
-        env_configuration=env_config,
     )
-
-    # --- Camera switching for two-arm mode ---
-    # Store the agentview camera params for each player's perspective.
-    # Player 0 (robot0) uses the default agentview; player 1 gets a
-    # 180°-rotated mirror so each player's view matches single-arm training.
-    _cam_params = None
-    if args.two_arm:
-        model = env._rs_env.sim.model
-        cid = model.camera_name2id("agentview")
-        pos0 = model.cam_pos[cid].copy()
-        quat0 = model.cam_quat[cid].copy()
-        pos1 = pos0.copy()
-        pos1[0] = -pos1[0]  # mirror across x=0
-        rot_180_z = np.array([0.0, 0.0, 0.0, 1.0])  # 180° around Z in (w,x,y,z)
-        quat1 = _quat_mult_wxyz(rot_180_z, quat0)
-        _cam_params = {
-            "cam_id": cid,
-            0: {"pos": pos0, "quat": quat0},
-            1: {"pos": pos1, "quat": quat1},
-        }
-
-    def _set_camera_for_player(player_id: int):
-        if _cam_params is None:
-            return
-        cid = _cam_params["cam_id"]
-        p = _cam_params[player_id]
-        env._rs_env.sim.model.cam_pos[cid] = p["pos"]
-        env._rs_env.sim.model.cam_quat[cid] = p["quat"]
 
     # --- Move selectors ---
     selectors = {
@@ -229,20 +208,22 @@ def main() -> None:
         color = colors[move_num % 2]
         player = move_num % 2  # OpenSpiel player ID
 
-        # Select move
-        selector = selectors[player]
-        row, col = selector.select_move(env._logic, env.board_size)
-        print(f"Move {move_num}: {color} -> ({row}, {col})")
-
-        # Switch camera to active player's perspective
-        _set_camera_for_player(player)
-
         # Set up turn
         if move_num == 0:
+            selector = selectors[player]
+            row, col = selector.select_move(env._logic, env.board_size)
             env.set_target_intersection(row, col)
-            obs = env.get_observation()  # re-render with correct camera
+            obs = env.get_observation()
+        elif hasattr(env, "_next_move_ready") and env._next_move_ready is not None:
+            # Already set up by previous iteration's teleport
+            color, row, col = env._next_move_ready
+            env._next_move_ready = None
         else:
+            selector = selectors[player]
+            row, col = selector.select_move(env._logic, env.board_size)
             obs = env.continue_game(target_row=row, target_col=col, stone_color=color)
+
+        print(f"Move {move_num}: {color} -> ({row}, {col})")
 
         # Notify KataGo selectors about the chosen move (both players need to know)
         for sel in selectors.values():
@@ -254,50 +235,73 @@ def main() -> None:
         instruction = template.format(color=color, r=row, c=col)
         prompt = f"In: What action should the robot take to {instruction.lower()}?\nOut:"
 
-        # VLA execution loop
+        # Execution loop
         placed = False
-        for step_idx in range(args.max_steps_per_move):
-            image = obs.get("agentview_image", obs.get("image"))
-            if image is not None and image.dtype != np.uint8:
-                image = (np.clip(image, 0, 1) * 255).astype(np.uint8)
-
-            if image is not None:
-                frame = _draw_overlay(image, move_num, color, row, col,
-                                      vla_placed, move_num) if args.overlay else image.copy()
+        if args.force_trajectory:
+            # Use the real scripted collection pipeline
+            from go_vla_benchmark.collect import _collect_single_episode
+            from go_vla_benchmark.mimicgen_interface import MG_GoJacoSingleMove
+            ei = MG_GoJacoSingleMove(env=env)
+            episode, placed = _collect_single_episode(
+                env=env, env_interface=ei,
+                controller_divisor=2.0, detour_steps=0, detour_radius=0.0,
+                approach_steps=10, press_steps=6, retreat_steps=6,
+                side_transfer_steps=0, side_margin=0.16, recovery_steps=3,
+                hover_height_noise=0.2,
+            )
+            # Extract frames from the episode
+            ep_images = episode.observations["agentview_image"]
+            step_idx = len(ep_images) - 1
+            for t in range(len(ep_images)):
+                img = ep_images[t]
+                if img.dtype != np.uint8:
+                    img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+                frame = _draw_overlay(img, move_num, color, row, col,
+                                      vla_placed, move_num) if args.overlay else img.copy()
                 frames.append(frame)
-
-            # 90% center crop + VLA inference
-            pil_image = Image.fromarray(image).convert("RGB")
-            w, h = pil_image.size
-            crop_size = int(min(w, h) * 0.9)
-            left = (w - crop_size) // 2
-            top = (h - crop_size) // 2
-            pil_image = pil_image.crop((left, top, left + crop_size, top + crop_size))
-            inputs = processor(prompt, pil_image).to(device, dtype=torch.bfloat16)
-            with torch.no_grad():
-                action = vla.predict_action(**inputs, unnorm_key=args.unnorm_key, do_sample=False)
-
-            obs, reward, done, info = env.step(action)
-
-            if env._move_committed:
-                placed = True
+            if placed:
                 vla_placed += 1
-                break
+            obs = env.get_observation()
+        else:
+            for step_idx in range(args.max_steps_per_move):
+                image = obs.get("agentview_image", obs.get("image"))
+                if image is not None and image.dtype != np.uint8:
+                    image = (np.clip(image, 0, 1) * 255).astype(np.uint8)
+
+                if image is not None:
+                    frame = _draw_overlay(image, move_num, color, row, col,
+                                          vla_placed, move_num) if args.overlay else image.copy()
+                    frames.append(frame)
+
+                # VLA inference
+                pil_image = Image.fromarray(image).convert("RGB")
+                w, h = pil_image.size
+                crop_size = int(min(w, h) * 0.9)
+                left = (w - crop_size) // 2
+                top = (h - crop_size) // 2
+                pil_image = pil_image.crop((left, top, left + crop_size, top + crop_size))
+                inputs = processor(prompt, pil_image).to(device, dtype=torch.bfloat16)
+                with torch.no_grad():
+                    action = vla.predict_action(**inputs, unnorm_key=args.unnorm_key, do_sample=False)
+
+                obs, reward, done, info = env.step(action)
+
+                if env._move_committed:
+                    placed = True
+                    vla_placed += 1
+                    break
 
         if not placed:
             if args.force_on_failure:
                 print(f"  Force-committing move {move_num}")
                 env._commit_target_move_fallback()
             else:
-                print(f"  Move {move_num} failed (VLA could not place)")
-
-        # Hold frames between moves
-        for _ in range(15):
-            hold_img = env.render(mode="rgb_array", height=args.camera_size, width=args.camera_size)
-            if args.overlay:
-                hold_img = _draw_overlay(hold_img, move_num, color, row, col,
-                                         vla_placed, move_num + 1)
-            frames.append(hold_img)
+                print(f"  Move {move_num} failed (VLA could not place) — stopping.")
+                game_record.append({
+                    "move": move_num, "color": color, "row": row, "col": col,
+                    "placed_by_vla": False, "steps": step_idx + 1,
+                })
+                break
 
         game_record.append({
             "move": move_num,
@@ -310,6 +314,24 @@ def main() -> None:
 
         status = "VLA" if placed else "FORCED"
         print(f"  [{status}] steps={step_idx + 1}")
+
+        # Teleport arm home immediately, then hold frames showing the reset board
+        if move_num < args.max_moves - 1:
+            # Peek at next move to set up continue_game now (teleport happens here)
+            next_color = colors[(move_num + 1) % 2]
+            next_selector = selectors[(move_num + 1) % 2]
+            next_row, next_col = next_selector.select_move(env._logic, env.board_size)
+            obs = env.continue_game(target_row=next_row, target_col=next_col, stone_color=next_color)
+            # Store for next iteration
+            env._next_move_ready = (next_color, next_row, next_col)
+
+        # Hold frames after teleport (pause so viewer can see the reset)
+        for _ in range(45):
+            hold_img = env.render(mode="rgb_array", height=args.camera_size, width=args.camera_size)
+            if args.overlay:
+                hold_img = _draw_overlay(hold_img, move_num, color, row, col,
+                                         vla_placed, move_num + 1)
+            frames.append(hold_img)
 
         if env._logic.is_game_over:
             print("Game over (OpenSpiel).")
