@@ -86,6 +86,18 @@ Mask selection is dataset-driven as well:
 This keeps the online and offline intervention paths anchored to the same
 recorded demo content instead of relying on a hand-written target phrase only.
 
+Reset-time randomness is also anchored per report now:
+
+- different demos no longer restart from the same reset-1 RNG state when they
+  share the same CLI `--seed`
+- the exporter derives a stable per-demo reset seed from the base seed and the
+  dataset demo identity
+- baseline and masked attempts for one demo reuse that same reset seed, so
+  board pose, lighting, camera, source-stone placement, fallback opening
+  sampling, and other reset-time random variables stay matched for fair
+  comparison
+- rerunning with the same CLI `--seed` reproduces the same per-demo scenes
+
 ## Trajectory Markers
 
 The rollout format did not need a structural rewrite. It already records
@@ -113,6 +125,7 @@ The JSON manifest includes:
 - `ever_grasped`
 - `ever_moved_puck`
 - `ever_released`
+- the resolved per-report `reset_seed`
 - the resolved intervention kind and selected text or patch mask
 - the dataset demo key and reference frame index when dataset mode is used
 

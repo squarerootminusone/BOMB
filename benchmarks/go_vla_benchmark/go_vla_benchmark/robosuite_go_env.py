@@ -1352,6 +1352,12 @@ class GoRobosuiteBenchmarkEnv:
         if options is None:
             options = GoResetOptions()
 
+        if options.reset_seed is not None:
+            reset_seed = int(options.reset_seed)
+            self._rng = np.random.RandomState(reset_seed)
+            self._rs_env.seed = reset_seed
+            self._rs_env.rng = np.random.default_rng(reset_seed)
+
         self._rs_env.reset()
         self._logic.reset()
         # board_intersections_xyz reads from geom_xpos, so XY shift +
@@ -1422,6 +1428,7 @@ class GoRobosuiteBenchmarkEnv:
             target_row=options.target_row,
             target_col=options.target_col,
             stone_color=options.stone_color,
+            reset_seed=options.reset_seed,
         )
 
     def _nearest_intersection(self, xy: np.ndarray) -> Tuple[int, int, float]:

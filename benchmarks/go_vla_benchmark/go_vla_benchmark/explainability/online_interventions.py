@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Callable, Dict, List, Optional, Protocol, Union
 
 import numpy as np
@@ -102,6 +103,7 @@ class OnlineInterventionReport:
     max_steps: int
     intervention_kind: str
     reference_frame_index: Optional[int]
+    reset_seed: Optional[int]
     text_mask: Optional[TextMaskCandidateSpec]
     patch_mask: Optional[PatchMaskCandidateSpec]
     baseline: OnlineInterventionAttempt
@@ -184,6 +186,80 @@ class OnlineInterventionEnv(Protocol):
 
     def close(self) -> None:
         """Release simulator resources."""
+
+
+def _clone_reset_options(options: GoResetOptions) -> GoResetOptions:
+    return GoResetOptions(
+        opening_moves=int(options.opening_moves),
+        opening_move_history=None
+        if options.opening_move_history is None
+        else np.asarray(options.opening_move_history, dtype=np.int32).copy(),
+        target_row=options.target_row,
+        target_col=options.target_col,
+        stone_color=options.stone_color,
+        reset_seed=None if options.reset_seed is None else int(options.reset_seed),
+    )
+
+
+def _stable_reset_seed(*parts: object) -> int:
+    hasher = hashlib.blake2s(digest_size=4)
+    for part in parts:
+        if isinstance(part, bytes):
+            data = part
+        else:
+            data = str(part).encode("utf-8")
+        hasher.update(len(data).to_bytes(4, byteorder="little", signed=False))
+        hasher.update(data)
+    return int.from_bytes(hasher.digest(), byteorder="little", signed=False)
+
+
+def _resolve_report_reset_options(
+    *,
+    env: OnlineInterventionEnv,
+    reset_options: Optional[GoResetOptions],
+    opening_moves: int,
+    target_row: int,
+    target_col: int,
+    stone_color: Optional[str],
+    demo_key: Optional[str],
+) -> GoResetOptions:
+    if reset_options is None:
+        resolved = GoResetOptions(
+            opening_moves=int(opening_moves),
+            target_row=int(target_row),
+            target_col=int(target_col),
+            stone_color=stone_color,
+        )
+    else:
+        resolved = _clone_reset_options(reset_options)
+
+    if resolved.reset_seed is not None:
+        return resolved
+
+    opening_history = (
+        b""
+        if resolved.opening_move_history is None
+        else np.asarray(resolved.opening_move_history, dtype=np.int32).reshape(-1).tobytes()
+    )
+    try:
+        env_seed = int(getattr(env, "seed", 0))
+    except Exception:
+        env_seed = 0
+
+    # Keep reset-time randomness fixed within one report / demo, but distinct
+    # across demos so dataset runs don't all restart at reset #1 of the same RNG stream.
+    resolved.reset_seed = _stable_reset_seed(
+        "go_online_intervention_reset",
+        env_seed,
+        getattr(env, "environment_name", type(env).__name__),
+        "" if demo_key is None else str(demo_key),
+        int(resolved.opening_moves),
+        -1 if resolved.target_row is None else int(resolved.target_row),
+        -1 if resolved.target_col is None else int(resolved.target_col),
+        "" if resolved.stone_color is None else str(resolved.stone_color),
+        opening_history,
+    )
+    return resolved
 
 
 def _xyz_from_pose(pose_or_xyz: np.ndarray) -> np.ndarray:
@@ -568,14 +644,15 @@ def collect_online_intervention_report(
 ) -> OnlineInterventionReport:
     env = env_factory()
     try:
-        resolved_reset_options = reset_options
-        if resolved_reset_options is None:
-            resolved_reset_options = GoResetOptions(
-                opening_moves=int(opening_moves),
-                target_row=int(target_row),
-                target_col=int(target_col),
-                stone_color=stone_color,
-            )
+        resolved_reset_options = _resolve_report_reset_options(
+            env=env,
+            reset_options=reset_options,
+            opening_moves=opening_moves,
+            target_row=target_row,
+            target_col=target_col,
+            stone_color=stone_color,
+            demo_key=demo_key,
+        )
         baseline = _rollout_attempt(
             env=env,
             policy=policy,
@@ -616,6 +693,7 @@ def collect_online_intervention_report(
             max_steps=int(max_steps),
             intervention_kind=str(intervention_kind),
             reference_frame_index=None if reference_frame_index is None else int(reference_frame_index),
+            reset_seed=None if resolved_reset_options.reset_seed is None else int(resolved_reset_options.reset_seed),
             text_mask=mask if isinstance(mask, TextMaskCandidateSpec) else None,
             patch_mask=mask if isinstance(mask, PatchMaskCandidateSpec) else None,
             baseline=baseline,
@@ -745,6 +823,7 @@ def online_text_mask_report_manifest(report: OnlineInterventionReport) -> Dict[s
         "target_row": int(report.target_row),
         "target_col": int(report.target_col),
         "max_steps": int(report.max_steps),
+        "reset_seed": None if report.reset_seed is None else int(report.reset_seed),
         "baseline": _attempt_to_dict(report.baseline),
         "masked_attempts": [_attempt_to_dict(attempt) for attempt in report.masked_attempts],
         "intervention_kind": str(report.intervention_kind),

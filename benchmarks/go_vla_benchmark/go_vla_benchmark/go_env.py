@@ -379,6 +379,9 @@ class GoJacoBenchmarkEnv:
         if options is None:
             options = GoResetOptions()
 
+        if options.reset_seed is not None:
+            self._rng = np.random.RandomState(int(options.reset_seed))
+
         self._dm_env.reset()
         self._refresh_intersection_cache()
 
@@ -420,6 +423,7 @@ class GoJacoBenchmarkEnv:
             target_row=options.target_row,
             target_col=options.target_col,
             stone_color=options.stone_color,
+            reset_seed=options.reset_seed,
         )
 
     def _nearest_intersection(self, eef_xy: np.ndarray) -> Tuple[int, int, float]:

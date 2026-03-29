@@ -1283,6 +1283,73 @@ class ExplainabilityPipelineTest(unittest.TestCase):
         self.assertEqual(len(env.reset_options_history), 2)
         self.assertEqual(env.reset_options_history[0].opening_move_history.tolist(), [0, 6])
         self.assertEqual(env.reset_options_history[1].opening_move_history.tolist(), [0, 6])
+        self.assertEqual(env.reset_options_history[0].reset_seed, env.reset_options_history[1].reset_seed)
+        self.assertIsNotNone(report.reset_seed)
+        self.assertEqual(report.reset_seed, env.reset_options_history[0].reset_seed)
+
+    def test_collect_online_report_derives_distinct_reset_seeds_per_demo(self) -> None:
+        scenario = {
+            "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+            "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+            "initial": {
+                "eef_xyz": np.asarray([-0.14, -0.09, 0.95], dtype=np.float32),
+                "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                "stone_grasped": False,
+                "move_committed": False,
+            },
+            "steps": [
+                {
+                    "eef_xyz": np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                    "stone_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                    "stone_grasped": False,
+                    "move_committed": True,
+                    "done": True,
+                },
+            ],
+        }
+        env_a = _FakeOnlineEnv(scenarios=[scenario])
+        env_b = _FakeOnlineEnv(scenarios=[scenario])
+
+        report_a = collect_online_intervention_report(
+            policy=_FakeOnlinePolicy(),
+            env_factory=lambda: env_a,
+            instruction="Place a black stone on the Go board at row 3, column 4.",
+            target_row=3,
+            target_col=4,
+            max_steps=1,
+            masked_attempts=0,
+            checkpoint="/tmp/fake-openvla",
+            demo_key="demo_0",
+            reset_options=GoResetOptions(
+                opening_moves=2,
+                target_row=3,
+                target_col=4,
+                stone_color="black",
+            ),
+        )
+        report_b = collect_online_intervention_report(
+            policy=_FakeOnlinePolicy(),
+            env_factory=lambda: env_b,
+            instruction="Place a black stone on the Go board at row 3, column 4.",
+            target_row=3,
+            target_col=4,
+            max_steps=1,
+            masked_attempts=0,
+            checkpoint="/tmp/fake-openvla",
+            demo_key="demo_1",
+            reset_options=GoResetOptions(
+                opening_moves=2,
+                target_row=3,
+                target_col=4,
+                stone_color="black",
+            ),
+        )
+
+        self.assertIsNotNone(report_a.reset_seed)
+        self.assertIsNotNone(report_b.reset_seed)
+        self.assertNotEqual(report_a.reset_seed, report_b.reset_seed)
+        self.assertEqual(report_a.reset_seed, env_a.reset_options_history[0].reset_seed)
+        self.assertEqual(report_b.reset_seed, env_b.reset_options_history[0].reset_seed)
 
     def test_collect_and_roundtrip_causal_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

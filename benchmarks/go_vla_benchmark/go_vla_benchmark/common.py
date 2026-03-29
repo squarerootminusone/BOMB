@@ -15,3 +15,4 @@ class GoResetOptions:
     target_row: Optional[int] = None
     target_col: Optional[int] = None
     stone_color: Optional[str] = None  # "black", "white", or None (random)
+    reset_seed: Optional[int] = None  # fixed seed for reset-time randomness not stored in HDF5
