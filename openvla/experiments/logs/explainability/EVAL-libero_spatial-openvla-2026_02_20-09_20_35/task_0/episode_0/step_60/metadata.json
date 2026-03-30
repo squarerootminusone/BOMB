@@ -1,0 +1,16 @@
+{
+  "task_id": 0,
+  "episode_idx": 0,
+  "step_idx": 60,
+  "task_description": "pick up the black bowl between the plate and the ramekin and place it on the plate",
+  "prompt": "",
+  "action": [
+    0.5448062506715455,
+    -0.0013865477898541423,
+    0.8258298287204666,
+    4.831982009551039e-05,
+    0.13241175933211458,
+    -0.11246218619977727,
+    0.0
+  ]
+}

@@ -1,0 +1,28 @@
+# @package _global_
+vla_path: CogACT/CogACT-Base
+
+data:
+  root_dir: ~/tensorflow_datasets
+  dataset_name: go_vla
+  shuffle_buffer_size: 100000
+  image_aug: false
+
+training:
+  batch_size: 32
+  max_steps: 150000
+  learning_rate: 2e-5
+  grad_accumulation_steps: 1
+  val_steps: 250
+  save_steps: 5000
+
+action:
+  action_dim: 4
+  action_model_type: DiT-B
+  future_action_window_size: 15
+  past_action_window_size: 0
+  repeated_diffusion_steps: 8
+
+wandb:
+  project: vla-models
+  entity: null
+  run_name: null

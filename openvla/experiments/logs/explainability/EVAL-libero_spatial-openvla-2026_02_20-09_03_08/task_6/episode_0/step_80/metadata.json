@@ -1,0 +1,16 @@
+{
+  "task_id": 6,
+  "episode_idx": 0,
+  "step_idx": 80,
+  "task_description": "pick up the black bowl next to the cookie box and place it on the plate",
+  "prompt": "",
+  "action": [
+    -0.2735807227188465,
+    0.7583193463437699,
+    -0.0026785731315612793,
+    -0.04713235313401503,
+    -0.010487395700286423,
+    0.00012604848426930881,
+    0.0
+  ]
+}

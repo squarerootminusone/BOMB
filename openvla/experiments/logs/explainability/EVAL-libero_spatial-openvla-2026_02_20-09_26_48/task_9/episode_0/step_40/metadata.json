@@ -1,0 +1,16 @@
+{
+  "task_id": 9,
+  "episode_idx": 0,
+  "step_idx": 40,
+  "task_description": "pick up the black bowl on the wooden cabinet and place it on the plate",
+  "prompt": "",
+  "action": [
+    -0.3197799873457235,
+    -0.0013865477898541423,
+    -0.9338340336201237,
+    -0.038855042089434244,
+    -0.1067563001431671,
+    0.05318487172617631,
+    0.996078431372549
+  ]
+}

@@ -1,0 +1,31 @@
+# @package _global_
+vla_path: openvla/openvla-7b
+
+data:
+  root_dir: ~/tensorflow_datasets
+  dataset_name: go_vla_dataset
+  shuffle_buffer_size: 100000
+  image_aug: true
+
+training:
+  batch_size: 8
+  max_steps: 150000
+  learning_rate: 5e-4
+  grad_accumulation_steps: 1
+  val_steps: 250
+  save_steps: 10000
+  num_steps_before_decay: 100000
+
+action:
+  use_l1_regression: true
+  use_diffusion: false
+  num_actions_chunk: 8
+
+lora:
+  enabled: true
+  rank: 32
+
+wandb:
+  project: vla-models
+  entity: null
+  run_name: null
