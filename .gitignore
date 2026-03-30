@@ -5,24 +5,15 @@
 
 robosuite-1.5.2
 eval_videos_5k/
-<<<<<<< HEAD
-
-outputs/
-=======
 outputs/
 benchmark_output/
 wandb/
->>>>>>> benchmark-fix-updated
 LIBERO/
 .DS_Store
 __pycache__/
 *.pyc
-<<<<<<< HEAD
-
-data/
-=======
 MUJOCO_LOG.TXT
 rlds_build.log
 
 data
->>>>>>> benchmark-fix-updated
+openvla-modified/
