@@ -37,9 +37,9 @@ for `--checkpoint`, so the cloud flow is:
 Run these from fish on your laptop:
 
 ```fish
-set -x HOST 83.233.228.250
+set -x HOST 192.165.134.28
 set -x CLOUD root@$HOST
-set -x PORT 28847
+set -x PORT 16825
 set -x KEY ~/.ssh/id_ed25519_cloud_instances
 set -x ADDRESS 8080:localhost:8080
 
