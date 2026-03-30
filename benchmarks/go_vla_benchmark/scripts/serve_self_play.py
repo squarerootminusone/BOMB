@@ -60,6 +60,7 @@ ensure_robosuite_compat()
 from go_vla_benchmark.common import GoResetOptions
 from go_vla_benchmark.env_factory import create_benchmark_env
 from go_vla_benchmark.move_selection import KataGoMoveSelector, make_selector
+from go_vla_benchmark.openvla_action_utils import openvla_action_to_benchmark
 
 from transformers import (
     AutoConfig,
@@ -316,6 +317,7 @@ class GameSession:
                             do_sample=False,
                         )
 
+                    action = openvla_action_to_benchmark(action, binarize=True)
                     obs, reward, done, info = env.step(action)
 
                     if env._move_committed:

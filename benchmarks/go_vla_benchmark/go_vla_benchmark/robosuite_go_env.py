@@ -1469,7 +1469,9 @@ class GoRobosuiteBenchmarkEnv:
         action_dict = OrderedDict()
         action_dict[self._arm_key] = arm_vector
         if (self._gripper_key is not None) and (self._gripper_dim > 0):
-            gripper_value = float(np.clip((2.0 * float(self._gripper_action[0])) - 1.0, -1.0, 1.0))
+            # The benchmark action already uses the robot's raw gripper range:
+            # -1=open, +1=close, with intermediate values allowed.
+            gripper_value = float(self._gripper_action[0])
             action_dict[self._gripper_key] = np.full((self._gripper_dim,), gripper_value, dtype=np.float32)
         return self._robot.create_action_vector(action_dict)
 

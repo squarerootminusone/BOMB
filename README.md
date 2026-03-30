@@ -55,7 +55,7 @@ inputs["pixel_values"] = inputs["pixel_values"].to("cuda", dtype=torch.bfloat16)
 inputs["input_ids"] = inputs["input_ids"].to("cuda")
 inputs["attention_mask"] = inputs["attention_mask"].to("cuda")
 action = vla.predict_action(**inputs, unnorm_key="go_vla_dataset", do_sample=False)
-# action is [dx, dy, dz, gripper] in raw action space
+# action is [dx, dy, dz, gripper] in OpenVLA convention (gripper: 1=open, 0=close)
 ```
 
 ### SpatialVLA (LoRA adapter)
@@ -74,7 +74,7 @@ model = model.merge_and_unload().eval().cuda()
 # Inference
 inputs = processor(images=[image], text=prompt, return_tensors="pt")
 generation_outputs = model.predict_action(inputs)
-result = processor.decode_actions(generation_outputs, unnorm_key="go_vla_dataset/5.0.0")
+result = processor.decode_actions(generation_outputs, unnorm_key="go_vla_dataset/6.0.0")
 action_7d = result["actions"][0]  # 7-DoF
 action_4d = np.concatenate([action_7d[:3], action_7d[6:7]])  # [dx, dy, dz, gripper]
 ```

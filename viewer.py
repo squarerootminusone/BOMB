@@ -112,6 +112,7 @@ def render_hud(img, actions_t, label_prefix=""):
     out = img.copy()
     h = out.shape[0]
     gripper = actions_t[3]
+    uses_openvla_gripper = 0.0 <= float(gripper) <= 1.0
 
     for i, (label, aidx, pos_rgb, neg_rgb) in enumerate(AXES):
         val = actions_t[aidx]
@@ -138,8 +139,9 @@ def render_hud(img, actions_t, label_prefix=""):
     # Gripper dot
     grip_row = h + BAR_Y_START + 1 * BAR_SPACING  # middle bar
     grip_col = BAR_CENTER_X + BAR_MAX_W + 20
-    grip_color = GRIP_OPEN_RGB if gripper < 0 else GRIP_CLOSED_RGB
-    grip_label = "open" if gripper < 0 else "closed"
+    is_open = (gripper > 0.5) if uses_openvla_gripper else (gripper < 0)
+    grip_color = GRIP_OPEN_RGB if is_open else GRIP_CLOSED_RGB
+    grip_label = "open" if is_open else "closed"
     _draw_rect(out, grip_row - 4, grip_col - 4, grip_row + 4, grip_col + 4, grip_color)
     _draw_text_simple(out, grip_row - 5, grip_col + 8, grip_label, grip_color)
 

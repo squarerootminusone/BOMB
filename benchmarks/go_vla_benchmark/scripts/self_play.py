@@ -41,6 +41,7 @@ ensure_robosuite_compat()
 from go_vla_benchmark.common import GoResetOptions
 from go_vla_benchmark.env_factory import create_benchmark_env
 from go_vla_benchmark.move_selection import KataGoMoveSelector, make_selector
+from go_vla_benchmark.openvla_action_utils import openvla_action_to_benchmark
 
 from transformers import AutoConfig, AutoImageProcessor, AutoModelForVision2Seq, AutoProcessor
 from transformers import BitsAndBytesConfig
@@ -284,6 +285,7 @@ def main() -> None:
                 with torch.no_grad():
                     action = vla.predict_action(**inputs, unnorm_key=args.unnorm_key, do_sample=False)
 
+                action = openvla_action_to_benchmark(action, binarize=True)
                 obs, reward, done, info = env.step(action)
 
                 if env._move_committed:

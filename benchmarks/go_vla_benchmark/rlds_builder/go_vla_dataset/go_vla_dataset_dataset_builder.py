@@ -67,6 +67,25 @@ def _extract_action_4d(actions: np.ndarray) -> np.ndarray:
     return actions[:, :4].astype(np.float32)
 
 
+def _standardize_gripper_for_openvla(actions_4d: np.ndarray) -> np.ndarray:
+    """Convert benchmark gripper commands to OpenVLA's absolute convention.
+
+    Benchmark/env raw convention:
+    - `-1.0` = open
+    - `+1.0` = close
+
+    OpenVLA training convention for the gripper dimension:
+    - `1.0` = open
+    - `0.0` = close
+
+    Older Go HDF5 files may also contain `0.0` for open during release, so
+    we treat all non-positive values as open to remain backward-compatible.
+    """
+    converted = actions_4d.copy()
+    converted[:, 3] = np.where(converted[:, 3] <= 0.0, 1.0, 0.0).astype(np.float32)
+    return converted
+
+
 def _compute_use_embedding(text: str) -> np.ndarray:
     """Compute USE-Large/5 embedding for a string, or return zeros."""
     try:
@@ -111,13 +130,14 @@ def _deduplicate_indices(
 class Builder(tfds.core.GeneratorBasedBuilder):
     """TFDS builder for Go VLA demonstrations."""
 
-    VERSION = tfds.core.Version("5.0.0")
+    VERSION = tfds.core.Version("6.0.0")
     RELEASE_NOTES = {
         "1.0.0": "Initial release.",
         "2.0.0": "4-DOF actions [dx,dy,dz,gripper] instead of zero-padded 7-DOF.",
         "3.0.0": "8 Hz control, board/lighting randomization, near-duplicate frame removal.",
         "4.0.0": "Explicit train/val splits (last 2 demos held out for validation).",
         "5.0.0": "Fixed gripper remap bug (was 2*x-1 producing -3, now raw {-1,0,1}). Regenerated from current env.",
+        "6.0.0": "Standardized gripper to OpenVLA absolute convention (1=open, 0=close) for training/eval parity.",
     }
 
     def _info(self) -> tfds.core.DatasetInfo:
@@ -204,8 +224,9 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                     ep["obs/board_state"], dtype=np.float32
                 )
 
-                actions_4d = _extract_action_4d(actions_4)
-                # Gripper is already {-1, 0, 1} in HDF5 — no remap needed
+                actions_4d = _standardize_gripper_for_openvla(_extract_action_4d(actions_4))
+                # Convert benchmark env gripper commands (-1=open, +1=close)
+                # to OpenVLA's absolute training convention (1=open, 0=close).
                 row, col = _derive_target_from_board_state(board_state)
 
                 # Deduplicate near-identical frames (idle/settling segments)
