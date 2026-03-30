@@ -24,6 +24,6 @@ lora:
 resume_from: null  # path to resume/ dir from a previous run
 
 wandb:
-  project: vla-models
-  entity: null
-  run_name: null
+  project: openvla-masked
+  entity: m-w-jarosz-team-epoch
+  run_name: dry_run_1
