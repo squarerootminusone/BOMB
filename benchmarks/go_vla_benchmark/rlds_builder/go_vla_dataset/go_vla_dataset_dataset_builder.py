@@ -224,17 +224,9 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                     ep["obs/board_state"], dtype=np.float32
                 )
 
-<<<<<<< HEAD
-                actions_4d = _extract_action_4d(actions_4)
-                # Remap legacy gripper values from {0, 1} to {-1, +1} when needed.
-                gripper = actions_4d[:, 3]
-                if np.all((gripper >= 0.0) & (gripper <= 1.0)):
-                    actions_4d[:, 3] = 2.0 * gripper - 1.0
-=======
                 actions_4d = _standardize_gripper_for_openvla(_extract_action_4d(actions_4))
                 # Convert benchmark env gripper commands (-1=open, +1=close)
                 # to OpenVLA's absolute training convention (1=open, 0=close).
->>>>>>> benchmark-fix-updated
                 row, col = _derive_target_from_board_state(board_state)
 
                 # Deduplicate near-identical frames (idle/settling segments)
