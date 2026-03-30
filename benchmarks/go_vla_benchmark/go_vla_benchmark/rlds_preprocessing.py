@@ -6,6 +6,8 @@ from typing import Optional
 
 import numpy as np
 
+from .openvla_action_utils import canonicalize_action_to_benchmark
+
 
 INSTRUCTION_TEMPLATES = [
     "Place a {color} stone on the Go board at row {r}, column {c}.",
@@ -50,15 +52,13 @@ def extract_action_4d(actions: np.ndarray) -> np.ndarray:
 
 
 def remap_gripper_to_openvla(actions_4d: np.ndarray) -> np.ndarray:
-    """Map gripper values from `{0, 1}` to `{-1, +1}` when needed."""
-    out = np.asarray(actions_4d, dtype=np.float32).copy()
-    if out.size == 0:
-        return out
+    """Historical alias that canonicalizes actions to benchmark gripper semantics.
 
-    gripper = out[:, 3]
-    if np.all((gripper >= 0.0) & (gripper <= 1.0)):
-        out[:, 3] = (2.0 * gripper) - 1.0
-    return out
+    Despite the legacy name, callers rely on this returning benchmark-style
+    actions with `-1=open, +1=close`, converting from OpenVLA `[1, 0]` only
+    when needed.
+    """
+    return canonicalize_action_to_benchmark(actions_4d, binarize=False)
 
 
 def compute_rlds_keep_indices(

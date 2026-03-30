@@ -210,7 +210,7 @@ builder applies OpenVLA-oriented preprocessing:
 - downsamples robosuite trajectories from 20 Hz to about 5 Hz
 - filters near-no-op actions
 - exports native 4-DoF actions `[dx, dy, dz, gripper]`
-- remaps gripper values from `{0, 1}` to `{-1, +1}`
+- standardizes gripper values from benchmark `{-1=open, +1=close}` to OpenVLA `1=open, 0=close`
 - derives language instructions from the board-state delta
 - preserves the HDF5 image resolution instead of hard-coding `256x256`
 

@@ -8,6 +8,8 @@ from typing import Dict, List, Optional, Protocol, Sequence, TypeVar
 
 import numpy as np
 
+from ..openvla_action_utils import canonicalize_action_to_benchmark
+
 
 TRACE_FORMAT = "openvla_local_explanations_v1"
 TRACE_SCHEMA_VERSION = 2
@@ -158,6 +160,7 @@ def resolve_optional_path(path: Optional[str], repo_root: Path) -> Optional[Path
 
 
 def extract_xyzg(actions: np.ndarray) -> np.ndarray:
+    """Extract `[dx, dy, dz, gripper]` and canonicalize to benchmark semantics."""
     actions = np.asarray(actions, dtype=np.float32)
     if actions.ndim == 1:
         actions = actions[None, :]
@@ -170,10 +173,7 @@ def extract_xyzg(actions: np.ndarray) -> np.ndarray:
     else:
         raise ValueError(f"expected action dimension >= 4, got {actions.shape}")
 
-    gripper = out[:, 3]
-    if np.all((gripper >= 0.0) & (gripper <= 1.0)):
-        out[:, 3] = (2.0 * gripper) - 1.0
-    return out
+    return canonicalize_action_to_benchmark(out, binarize=False)
 
 
 def compute_episode_scores(gt_actions: np.ndarray, pred_actions: np.ndarray) -> tuple[np.ndarray, float, float, float]:
