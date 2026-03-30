@@ -188,12 +188,12 @@ def main():
 
         pred_actions = np.array(pred_actions)
 
-        # Binarize gripper for comparison: RLDS stores -3/+1 (robosuite convention),
-        # model predicts -1/+1. Map both to {0, 1} before comparing.
+        # RLDS and model outputs both use standardized absolute gripper values:
+        # `1=open`, `0=close`.
         gt_compare = gt_actions.copy()
         pred_compare = pred_actions.copy()
-        gt_compare[:, 3] = (gt_compare[:, 3] > 0).astype(np.float32)
-        pred_compare[:, 3] = (pred_compare[:, 3] > 0).astype(np.float32)
+        gt_compare[:, 3] = (gt_compare[:, 3] > 0.5).astype(np.float32)
+        pred_compare[:, 3] = (pred_compare[:, 3] > 0.5).astype(np.float32)
 
         # Metrics
         l1_per_step = np.abs(pred_compare - gt_compare).mean(axis=1)

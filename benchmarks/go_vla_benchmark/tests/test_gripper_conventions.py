@@ -12,13 +12,29 @@ sys.path.insert(0, str(REPO_ROOT / "benchmarks" / "go_vla_benchmark"))
 
 from go_vla_benchmark.explainability.core import extract_xyzg  # noqa: E402
 from go_vla_benchmark.openvla_action_utils import (  # noqa: E402
+    benchmark_action_to_openvla,
     canonicalize_action_to_benchmark,
     openvla_action_to_benchmark,
+    standardized_action_to_benchmark,
 )
 from go_vla_benchmark.rlds_preprocessing import remap_gripper_to_openvla  # noqa: E402
 
 
 class GripperConventionTest(unittest.TestCase):
+    def test_benchmark_action_to_openvla_flips_open_and_close(self) -> None:
+        benchmark_actions = np.asarray(
+            [[0.0, 0.0, 0.0, -1.0], [0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 0.0]],
+            dtype=np.float32,
+        )
+
+        np.testing.assert_array_equal(
+            benchmark_action_to_openvla(benchmark_actions),
+            np.asarray(
+                [[0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
+                dtype=np.float32,
+            ),
+        )
+
     def test_openvla_action_to_benchmark_flips_open_and_close(self) -> None:
         action_open = np.asarray([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
         action_close = np.asarray([0.0, 0.0, 0.0, 0.0], dtype=np.float32)
@@ -30,6 +46,14 @@ class GripperConventionTest(unittest.TestCase):
         np.testing.assert_array_equal(
             openvla_action_to_benchmark(action_close),
             np.asarray([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+        )
+
+    def test_standardized_action_to_benchmark_alias_matches_openvla_helper(self) -> None:
+        action = np.asarray([0.2, -0.1, 0.0, 1.0], dtype=np.float32)
+
+        np.testing.assert_array_equal(
+            standardized_action_to_benchmark(action),
+            openvla_action_to_benchmark(action),
         )
 
     def test_extract_xyzg_matches_benchmark_conversion_for_openvla_gripper(self) -> None:

@@ -842,7 +842,8 @@ def libero_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def go_vla_dataset_transform(trajectory: Dict[str, Any]) -> Dict[str, Any]:
-    # Actions are already 4D [dx,dy,dz,gripper] with gripper in {-1,+1}
+    # Actions are already 4D [dx,dy,dz,gripper] with standardized gripper
+    # semantics `1=open, 0=close`.
     return trajectory
 
 

@@ -292,9 +292,11 @@ def build_overlays(actions, img_h, img_w):
     grip_col = BAR_CENTER + BAR_MAX_W + 45.0
     grip_row = axis_rows["y"]  # middle bar height
     grip_colors = np.zeros((T, 4))
-    grip_colors[gripper < 0] = GRIP_OPEN_COLOR
-    grip_colors[gripper >= 0] = GRIP_CLOSED_COLOR
-    grip_strs = ["open" if gripper[i] < 0 else "closed" for i in range(T)]
+    uses_openvla_gripper = (gripper >= 0.0) & (gripper <= 1.0)
+    is_open = np.where(uses_openvla_gripper, gripper > 0.5, gripper < 0.0)
+    grip_colors[is_open] = GRIP_OPEN_COLOR
+    grip_colors[~is_open] = GRIP_CLOSED_COLOR
+    grip_strs = ["open" if bool(is_open[i]) else "closed" for i in range(T)]
 
     # Zero-line ticks
     zero_lines = []

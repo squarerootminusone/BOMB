@@ -38,6 +38,7 @@ from go_vla_benchmark.common import GoResetOptions
 from go_vla_benchmark.env_factory import create_benchmark_env
 from go_vla_benchmark.collect import _collect_single_episode
 from go_vla_benchmark.mimicgen_interface import MG_GoJacoSingleMove
+from go_vla_benchmark.openvla_action_utils import standardized_action_to_benchmark
 
 from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
 from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
@@ -240,11 +241,12 @@ def main():
 
     isolated_preds = np.array(isolated_preds)
 
-    # Binarize gripper for fair comparison
+    # RLDS and model outputs both use standardized absolute gripper values:
+    # `1=open`, `0=close`.
     gt_compare = gt_actions.copy()
     pred_compare = isolated_preds.copy()
-    gt_compare[:, 3] = (gt_compare[:, 3] > 0).astype(np.float32)
-    pred_compare[:, 3] = (pred_compare[:, 3] > 0).astype(np.float32)
+    gt_compare[:, 3] = (gt_compare[:, 3] > 0.5).astype(np.float32)
+    pred_compare[:, 3] = (pred_compare[:, 3] > 0.5).astype(np.float32)
     isolated_l1 = np.abs(pred_compare - gt_compare).mean(axis=1)
     isolated_l1_xyz = np.abs(isolated_preds[:, :3] - gt_actions[:, :3]).mean()
     print(f"  Mean L1: {isolated_l1.mean():.4f} (xyz only: {isolated_l1_xyz:.4f})")
@@ -294,7 +296,8 @@ def main():
             f"Action: {' '.join(f'{v:+.3f}' for v in action[:4])}",
         ]))
 
-        obs, reward, done, info = env.step(action[:4])
+        env_action = standardized_action_to_benchmark(action[:4], binarize=True)
+        obs, reward, done, info = env.step(env_action)
         rollout_reward += reward
         if env.is_success().get("task", False):
             print(f"  SUCCESS at step {step_idx + 1}!")

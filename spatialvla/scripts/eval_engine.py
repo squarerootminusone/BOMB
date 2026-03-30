@@ -29,6 +29,7 @@ sys.path.insert(0, str(REPO_ROOT / "benchmarks" / "go_vla_benchmark"))
 
 from go_vla_benchmark.paths import bootstrap_pythonpath
 bootstrap_pythonpath(REPO_ROOT)
+from go_vla_benchmark.openvla_action_utils import standardized_action_to_benchmark
 from go_vla_benchmark.robosuite_compat import ensure_robosuite_compat
 ensure_robosuite_compat()
 from go_vla_benchmark.common import GoResetOptions
@@ -51,7 +52,7 @@ def parse_args():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--save-videos", action="store_true")
     p.add_argument("--output-dir", type=str, default=None)
-    p.add_argument("--unnorm-key", type=str, default="go_vla_dataset/4.0.0")
+    p.add_argument("--unnorm-key", type=str, default="go_vla_dataset/6.0.0")
     p.add_argument("--opening-min", type=int, default=0)
     p.add_argument("--opening-max", type=int, default=4)
     return p.parse_args()
@@ -133,6 +134,7 @@ def main():
             action_7d = result["actions"][0]  # first action in chunk
             action = _7dof_to_4dof(action_7d)
 
+            action = standardized_action_to_benchmark(action, binarize=True)
             obs, reward, done, info = env.step(action)
             episode_reward += reward
             if env.is_success().get("task", False):

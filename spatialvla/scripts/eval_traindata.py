@@ -39,7 +39,7 @@ def parse_args():
     p.add_argument("--max-episodes", type=int, default=None)
     p.add_argument("--save-videos", action="store_true")
     p.add_argument("--output-dir", type=str, default=None)
-    p.add_argument("--unnorm-key", type=str, default="go_vla_dataset/4.0.0")
+    p.add_argument("--unnorm-key", type=str, default="go_vla_dataset/6.0.0")
     return p.parse_args()
 
 

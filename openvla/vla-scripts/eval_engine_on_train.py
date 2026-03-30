@@ -39,6 +39,7 @@ from go_vla_benchmark.robosuite_compat import ensure_robosuite_compat
 ensure_robosuite_compat()
 from go_vla_benchmark.common import GoResetOptions
 from go_vla_benchmark.env_factory import create_benchmark_env
+from go_vla_benchmark.openvla_action_utils import standardized_action_to_benchmark
 
 from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
 from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
@@ -180,6 +181,7 @@ def main():
         with torch.no_grad():
             action = vla.predict_action(**inputs, unnorm_key=args.unnorm_key, do_sample=False)
 
+        action = standardized_action_to_benchmark(action, binarize=True)
         obs, reward, done, info = env.step(action)
         episode_reward += reward
 

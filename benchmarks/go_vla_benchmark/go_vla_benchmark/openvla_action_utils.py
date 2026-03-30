@@ -24,8 +24,8 @@ def benchmark_gripper_to_openvla(gripper: np.ndarray | float) -> np.ndarray:
     return np.where(gripper_arr <= 0.0, 1.0, 0.0).astype(np.float32)
 
 
-def _openvla_gripper_to_benchmark(gripper: np.ndarray | float, *, binarize: bool) -> np.ndarray:
-    """Map OpenVLA gripper values `[1=open, 0=close]` into benchmark semantics."""
+def _absolute_gripper_to_benchmark(gripper: np.ndarray | float, *, binarize: bool) -> np.ndarray:
+    """Map standardized absolute gripper values `[1=open, 0=close]` into benchmark semantics."""
     converted = 1.0 - (2.0 * np.asarray(gripper, dtype=np.float32))
     if binarize:
         converted = np.sign(converted)
@@ -59,12 +59,16 @@ def canonicalize_action_to_benchmark(action: np.ndarray, *, binarize: bool = Fal
     converted = action_arr.copy()
     gripper = converted[..., 3]
     if gripper.size > 0 and np.all((gripper >= 0.0) & (gripper <= 1.0)):
-        converted[..., 3] = _openvla_gripper_to_benchmark(gripper, binarize=binarize)
+        converted[..., 3] = _absolute_gripper_to_benchmark(gripper, binarize=binarize)
     return converted
 
 
-def openvla_action_to_benchmark(action: np.ndarray, *, binarize: bool = True) -> np.ndarray:
-    """Convert an OpenVLA-predicted action into benchmark env semantics.
+def standardized_action_to_benchmark(action: np.ndarray, *, binarize: bool = True) -> np.ndarray:
+    """Convert a standardized absolute-gripper action into benchmark env semantics.
+
+    This is suitable for any model trained against Go RLDS actions that use:
+      - `1.0` = open
+      - `0.0` = close
 
     Mirrors the stock OpenVLA rollout helpers:
       1. gripper `[0, 1]` -> `[-1, 1]`
@@ -76,5 +80,10 @@ def openvla_action_to_benchmark(action: np.ndarray, *, binarize: bool = True) ->
         raise ValueError(f"expected at least 4 action dims, got shape {action_arr.shape}")
 
     converted = action_arr[:4].copy()
-    converted[3] = _openvla_gripper_to_benchmark(converted[3], binarize=binarize)
+    converted[3] = _absolute_gripper_to_benchmark(converted[3], binarize=binarize)
     return converted
+
+
+def openvla_action_to_benchmark(action: np.ndarray, *, binarize: bool = True) -> np.ndarray:
+    """Backward-compatible alias for OpenVLA rollouts using standardized gripper outputs."""
+    return standardized_action_to_benchmark(action, binarize=binarize)

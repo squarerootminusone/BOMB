@@ -37,6 +37,7 @@ ensure_robosuite_compat()
 
 from go_vla_benchmark.common import GoResetOptions
 from go_vla_benchmark.env_factory import create_benchmark_env
+from go_vla_benchmark.openvla_action_utils import standardized_action_to_benchmark
 
 from transformers import AutoConfig, AutoImageProcessor, AutoModelForVision2Seq, AutoProcessor
 
@@ -205,6 +206,7 @@ def main() -> None:
                 action = vla.predict_action(**inputs, unnorm_key=args.unnorm_key, do_sample=False)
 
             # Step environment
+            action = standardized_action_to_benchmark(action, binarize=True)
             obs, reward, done, info = env.step(action)
             episode_reward += reward
 

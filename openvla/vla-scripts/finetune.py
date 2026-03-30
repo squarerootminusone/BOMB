@@ -58,6 +58,7 @@ try:
     from go_vla_benchmark.paths import bootstrap_pythonpath
 
     bootstrap_pythonpath(_REPO_ROOT)
+    from go_vla_benchmark.openvla_action_utils import standardized_action_to_benchmark
     from go_vla_benchmark.robosuite_compat import ensure_robosuite_compat
 
     ensure_robosuite_compat()
@@ -218,6 +219,7 @@ def run_engine_rollout(vla, processor, device_id, output_dir, step, use_wandb, d
         with torch.autocast("cuda", dtype=torch.bfloat16):
             action = vla.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False)
 
+        action = standardized_action_to_benchmark(action, binarize=True)
         obs, reward, done, info = env.step(action)
         success_info = env.is_success()
         if success_info.get("task", False):
