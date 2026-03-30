@@ -1,0 +1,16 @@
+{
+  "task_id": 2,
+  "episode_idx": 0,
+  "step_idx": 120,
+  "task_description": "pick up the black bowl from table center and place it on the plate",
+  "prompt": "",
+  "action": [
+    0.016814654935808804,
+    -0.0013865477898541423,
+    0.01931722514769607,
+    4.831982009551039e-05,
+    4.201572315365443e-05,
+    0.00012604848426930881,
+    0.996078431372549
+  ]
+}

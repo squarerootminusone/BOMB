@@ -1,0 +1,29 @@
+# @package _global_
+vla_path: openvla/openvla-7b
+
+data:
+  root_dir: ~/tensorflow_datasets
+  dataset_name: go_vla_dataset
+  shuffle_buffer_size: 100000
+  image_aug: true
+
+training:
+  batch_size: 16
+  epochs: 20
+  learning_rate: 5e-4
+  grad_accumulation_steps: 1
+  gradient_checkpointing: true
+  val_steps: 100
+
+lora:
+  enabled: true
+  rank: 32
+  dropout: 0.0
+  quantization: false
+
+resume_from: null  # path to resume/ dir from a previous run
+
+wandb:
+  project: vla-models
+  entity: null
+  run_name: null

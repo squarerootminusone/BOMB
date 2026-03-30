@@ -1,0 +1,16 @@
+{
+  "task_id": 7,
+  "episode_idx": 0,
+  "step_idx": 70,
+  "task_description": "pick up the black bowl on the stove and place it on the plate",
+  "prompt": "",
+  "action": [
+    0.419408246684308,
+    0.5714075787394655,
+    0.4519012579730912,
+    -0.015678571164607996,
+    4.201572315365443e-05,
+    -0.06587395115810282,
+    0.0
+  ]
+}

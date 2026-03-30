@@ -1,0 +1,236 @@
+{
+  "n_layers": 33,
+  "layers": [
+    {
+      "layer": 0,
+      "predicted_bin": 173,
+      "predicted_value": 0.36078431372549025,
+      "max_prob": 0.004178256262093782,
+      "entropy": 5.541071891784668
+    },
+    {
+      "layer": 1,
+      "predicted_bin": 177,
+      "predicted_value": 0.392156862745098,
+      "max_prob": 0.004580749198794365,
+      "entropy": 5.539454460144043
+    },
+    {
+      "layer": 2,
+      "predicted_bin": 107,
+      "predicted_value": -0.1568627450980392,
+      "max_prob": 0.004976959433406591,
+      "entropy": 5.537336349487305
+    },
+    {
+      "layer": 3,
+      "predicted_bin": 107,
+      "predicted_value": -0.1568627450980392,
+      "max_prob": 0.00525639345869422,
+      "entropy": 5.535386085510254
+    },
+    {
+      "layer": 4,
+      "predicted_bin": 107,
+      "predicted_value": -0.1568627450980392,
+      "max_prob": 0.005572240334004164,
+      "entropy": 5.534181594848633
+    },
+    {
+      "layer": 5,
+      "predicted_bin": 107,
+      "predicted_value": -0.1568627450980392,
+      "max_prob": 0.0056569878943264484,
+      "entropy": 5.533008098602295
+    },
+    {
+      "layer": 6,
+      "predicted_bin": 107,
+      "predicted_value": -0.1568627450980392,
+      "max_prob": 0.0059290118515491486,
+      "entropy": 5.530723571777344
+    },
+    {
+      "layer": 7,
+      "predicted_bin": 107,
+      "predicted_value": -0.1568627450980392,
+      "max_prob": 0.006154816132038832,
+      "entropy": 5.52751350402832
+    },
+    {
+      "layer": 8,
+      "predicted_bin": 107,
+      "predicted_value": -0.1568627450980392,
+      "max_prob": 0.006362361367791891,
+      "entropy": 5.522950172424316
+    },
+    {
+      "layer": 9,
+      "predicted_bin": 115,
+      "predicted_value": -0.09411764705882353,
+      "max_prob": 0.0067580766044557095,
+      "entropy": 5.513681411743164
+    },
+    {
+      "layer": 10,
+      "predicted_bin": 237,
+      "predicted_value": 0.8627450980392157,
+      "max_prob": 0.0077237640507519245,
+      "entropy": 5.494487762451172
+    },
+    {
+      "layer": 11,
+      "predicted_bin": 32,
+      "predicted_value": -0.7450980392156863,
+      "max_prob": 0.009348126128315926,
+      "entropy": 5.473243236541748
+    },
+    {
+      "layer": 12,
+      "predicted_bin": 248,
+      "predicted_value": 0.9490196078431372,
+      "max_prob": 0.016132187098264694,
+      "entropy": 5.362306594848633
+    },
+    {
+      "layer": 13,
+      "predicted_bin": 207,
+      "predicted_value": 0.6274509803921569,
+      "max_prob": 0.020163273438811302,
+      "entropy": 5.256006240844727
+    },
+    {
+      "layer": 14,
+      "predicted_bin": 30,
+      "predicted_value": -0.7607843137254902,
+      "max_prob": 0.028209002688527107,
+      "entropy": 5.22618293762207
+    },
+    {
+      "layer": 15,
+      "predicted_bin": 145,
+      "predicted_value": 0.14117647058823524,
+      "max_prob": 0.02709982357919216,
+      "entropy": 5.138104438781738
+    },
+    {
+      "layer": 16,
+      "predicted_bin": 30,
+      "predicted_value": -0.7607843137254902,
+      "max_prob": 0.01957063004374504,
+      "entropy": 5.14472770690918
+    },
+    {
+      "layer": 17,
+      "predicted_bin": 14,
+      "predicted_value": -0.8862745098039215,
+      "max_prob": 0.026414282619953156,
+      "entropy": 5.081106185913086
+    },
+    {
+      "layer": 18,
+      "predicted_bin": 215,
+      "predicted_value": 0.6901960784313725,
+      "max_prob": 0.03024781309068203,
+      "entropy": 5.02479362487793
+    },
+    {
+      "layer": 19,
+      "predicted_bin": 215,
+      "predicted_value": 0.6901960784313725,
+      "max_prob": 0.04908732697367668,
+      "entropy": 4.991960525512695
+    },
+    {
+      "layer": 20,
+      "predicted_bin": 210,
+      "predicted_value": 0.6509803921568627,
+      "max_prob": 0.039326850324869156,
+      "entropy": 4.964534282684326
+    },
+    {
+      "layer": 21,
+      "predicted_bin": 210,
+      "predicted_value": 0.6509803921568627,
+      "max_prob": 0.056186508387327194,
+      "entropy": 4.79009485244751
+    },
+    {
+      "layer": 22,
+      "predicted_bin": 113,
+      "predicted_value": -0.1098039215686275,
+      "max_prob": 0.10556007921695709,
+      "entropy": 4.494572639465332
+    },
+    {
+      "layer": 23,
+      "predicted_bin": 113,
+      "predicted_value": -0.1098039215686275,
+      "max_prob": 0.13462750613689423,
+      "entropy": 4.321493625640869
+    },
+    {
+      "layer": 24,
+      "predicted_bin": 113,
+      "predicted_value": -0.1098039215686275,
+      "max_prob": 0.19257161021232605,
+      "entropy": 3.728529214859009
+    },
+    {
+      "layer": 25,
+      "predicted_bin": 219,
+      "predicted_value": 0.7215686274509804,
+      "max_prob": 0.263164758682251,
+      "entropy": 3.1785783767700195
+    },
+    {
+      "layer": 26,
+      "predicted_bin": 162,
+      "predicted_value": 0.27450980392156854,
+      "max_prob": 0.39367789030075073,
+      "entropy": 2.8626160621643066
+    },
+    {
+      "layer": 27,
+      "predicted_bin": 162,
+      "predicted_value": 0.27450980392156854,
+      "max_prob": 0.2646697759628296,
+      "entropy": 3.2333922386169434
+    },
+    {
+      "layer": 28,
+      "predicted_bin": 154,
+      "predicted_value": 0.21176470588235285,
+      "max_prob": 0.20643401145935059,
+      "entropy": 3.1538290977478027
+    },
+    {
+      "layer": 29,
+      "predicted_bin": 154,
+      "predicted_value": 0.21176470588235285,
+      "max_prob": 0.47020500898361206,
+      "entropy": 1.8269128799438477
+    },
+    {
+      "layer": 30,
+      "predicted_bin": 104,
+      "predicted_value": -0.18039215686274512,
+      "max_prob": 0.8761683106422424,
+      "entropy": 0.5931342840194702
+    },
+    {
+      "layer": 31,
+      "predicted_bin": 104,
+      "predicted_value": -0.18039215686274512,
+      "max_prob": 0.8655633330345154,
+      "entropy": 0.40673646330833435
+    },
+    {
+      "layer": 32,
+      "predicted_bin": 112,
+      "predicted_value": -0.11764705882352944,
+      "max_prob": 0.9817678332328796,
+      "entropy": 0.09270648658275604
+    }
+  ]
+}

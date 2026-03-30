@@ -1,0 +1,6 @@
+{
+  "num_prompts": 10,
+  "mode": "deep",
+  "init_std": 0.02,
+  "dropout": 0.0
+}

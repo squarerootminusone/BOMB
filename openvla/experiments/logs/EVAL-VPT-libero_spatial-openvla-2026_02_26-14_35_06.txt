@@ -1,0 +1,330 @@
+Task suite: libero_spatial
+VPT weights: runs/openvla-7b+libero_spatial+vpt-deep-p50+b16+lr-0.001+8bit--image_aug/vpt_checkpoint
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 1...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=1--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 1
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 2...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=2--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 2
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 3...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=3--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 3
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 4...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=4--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 4
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 5...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=5--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 5
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 6...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=6--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 6
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 7...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=7--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 7
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 8...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=8--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 8
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 9...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=9--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 9
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 10...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=10--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 10
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 11...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=11--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 11
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 12...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=12--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 12
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 13...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=13--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 13
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 14...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=14--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 14
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 15...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=15--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 15
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 16...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=16--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 16
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 17...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=17--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 17
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 18...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=18--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 18
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 19...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=19--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 19
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 20...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=20--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 20
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 21...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=21--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 21
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 22...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=22--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 22
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 23...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=23--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 23
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 24...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=24--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 24
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 25...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=25--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 25
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 26...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=26--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 26
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 27...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=27--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 27
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 28...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=28--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 28
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 29...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=29--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 29
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 30...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=30--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 30
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 31...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=31--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 31
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 32...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=32--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 32
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 33...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=33--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 33
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 34...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=34--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 34
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 35...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=35--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 35
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 36...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=36--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 36
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 37...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=37--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 37
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 38...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=38--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 38
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 39...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=39--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 39
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 40...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=40--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 40
+# successes: 0 (0.0%)
+
+Task: pick up the black bowl between the plate and the ramekin and place it on the plate
+Starting episode 41...
+Caught exception: expected scalar type Float but found BFloat16
+Saved rollout MP4 at path ./rollouts/2026_02_26/2026_02_26-14_35_06--episode=41--success=False--task=pick_up_the_black_bowl_between_the_plate_and_the_r.mp4
+Success: False
+# episodes completed so far: 41
+# successes: 0 (0.0%)

@@ -1,0 +1,42 @@
+# OpenVLA finetuning (pinned for compatibility)
+transformers==4.40.1
+peft==0.11.1
+timm==0.9.10
+accelerate==0.32.1
+
+# OpenVLA runtime
+draccus==0.8.0
+einops
+sentencepiece==0.1.99
+huggingface_hub
+rich
+protobuf
+
+# Config / logging
+hydra-core
+omegaconf
+wandb
+
+# Quantization
+bitsandbytes
+
+# TensorFlow (RLDS dataset loading)
+tensorflow==2.15.0
+tensorflow_datasets==4.9.3
+tensorflow_graphics==2021.12.3
+dlimp @ git+https://github.com/moojink/dlimp_openvla
+importlib_resources
+
+# Robotics / simulation
+mujoco
+dm-control
+dm-env
+robosuite==1.5.2
+
+# Benchmark / data
+h5py
+tqdm
+numpy
+absl-py
+open_spiel
+imageio[ffmpeg]
