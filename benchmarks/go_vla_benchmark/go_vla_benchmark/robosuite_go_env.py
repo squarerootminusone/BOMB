@@ -1271,6 +1271,40 @@ class GoRobosuiteBenchmarkEnv:
             self._rs_env.sim.data.set_joint_qvel(jnt_name, np.zeros(6, dtype=np.float64))
         self._rs_env.sim.forward()
 
+    def continue_game(self, target_row: int, target_col: int, stone_color: str) -> Dict[str, np.ndarray]:
+        """Transition to the next move without full reset (for self-play).
+
+        Preserves board state, lighting, camera, and game logic.
+        Teleports the arm back to home position, spawns a new stone, sets new target.
+        """
+        # Teleport arm back to home by resetting robot joint positions
+        robot = self._rs_env.robots[0]
+        robot.reset(deterministic=True)
+        self._rs_env.sim.forward()
+
+        # Settle briefly so the arm stabilizes
+        self._settle_stones(num_steps=50)
+
+        # Set stone color and target
+        self._stone_color = stone_color
+        self.set_target_intersection(row=int(target_row), col=int(target_col))
+
+        # Set self-play player based on current OpenSpiel turn
+        self._self_play_player = int(self._logic._state.current_player())
+
+        # Spawn new stone near the source position
+        self._active_white_stone_idx = None
+        self._spawn_active_stone()
+        self._settle_stones(num_steps=50)
+
+        # Reset per-turn state
+        self._step_count = 0
+        self._move_committed = False
+        self._success_step = None
+        self._eef_trail = [self.get_eef_pose()[:3, 3].copy()]
+
+        return self.get_observation()
+
     def _commit_target_move_fallback(self) -> bool:
         """Force-commit the selected target move when EEF is correctly pressing target."""
         if self._active_white_stone_idx is not None:
@@ -1470,7 +1504,9 @@ class GoRobosuiteBenchmarkEnv:
         action_dict = OrderedDict()
         action_dict[self._arm_key] = arm_vector
         if (self._gripper_key is not None) and (self._gripper_dim > 0):
-            gripper_value = float(np.clip((2.0 * float(self._gripper_action[0])) - 1.0, -1.0, 1.0))
+            # The benchmark action already uses the robot's raw gripper range:
+            # -1=open, +1=close, with intermediate values allowed.
+            gripper_value = float(self._gripper_action[0])
             action_dict[self._gripper_key] = np.full((self._gripper_dim,), gripper_value, dtype=np.float32)
         return self._robot.create_action_vector(action_dict)
 

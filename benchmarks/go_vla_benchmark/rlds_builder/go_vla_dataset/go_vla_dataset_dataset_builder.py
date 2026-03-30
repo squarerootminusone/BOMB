@@ -67,6 +67,25 @@ def _extract_action_4d(actions: np.ndarray) -> np.ndarray:
     return actions[:, :4].astype(np.float32)
 
 
+def _standardize_gripper_for_openvla(actions_4d: np.ndarray) -> np.ndarray:
+    """Convert benchmark gripper commands to OpenVLA's absolute convention.
+
+    Benchmark/env raw convention:
+    - `-1.0` = open
+    - `+1.0` = close
+
+    OpenVLA training convention for the gripper dimension:
+    - `1.0` = open
+    - `0.0` = close
+
+    Older Go HDF5 files may also contain `0.0` for open during release, so
+    we treat all non-positive values as open to remain backward-compatible.
+    """
+    converted = actions_4d.copy()
+    converted[:, 3] = np.where(converted[:, 3] <= 0.0, 1.0, 0.0).astype(np.float32)
+    return converted
+
+
 def _compute_use_embedding(text: str) -> np.ndarray:
     """Compute USE-Large/5 embedding for a string, or return zeros."""
     try:
@@ -111,11 +130,14 @@ def _deduplicate_indices(
 class Builder(tfds.core.GeneratorBasedBuilder):
     """TFDS builder for Go VLA demonstrations."""
 
-    VERSION = tfds.core.Version("3.0.0")
+    VERSION = tfds.core.Version("6.0.0")
     RELEASE_NOTES = {
         "1.0.0": "Initial release.",
         "2.0.0": "4-DOF actions [dx,dy,dz,gripper] instead of zero-padded 7-DOF.",
         "3.0.0": "8 Hz control, board/lighting randomization, near-duplicate frame removal.",
+        "4.0.0": "Explicit train/val splits (last 2 demos held out for validation).",
+        "5.0.0": "Fixed gripper remap bug (was 2*x-1 producing -3, now raw {-1,0,1}). Regenerated from current env.",
+        "6.0.0": "Standardized gripper to OpenVLA absolute convention (1=open, 0=close) for training/eval parity.",
     }
 
     def _info(self) -> tfds.core.DatasetInfo:
@@ -171,18 +193,28 @@ class Builder(tfds.core.GeneratorBasedBuilder):
             homepage="https://github.com/anthropics/dsait4125",
         )
 
+    _NUM_VAL = 2  # number of held-out demos (taken from the end)
+
     def _split_generators(self, dl_manager):
         hdf5_path = os.environ.get("GO_VLA_HDF5_PATH", _DEFAULT_HDF5_PATH)
-        return {
-            "train": self._generate_examples(hdf5_path),
-        }
-
-    def _generate_examples(self, hdf5_path: str):
-        """Yield (key, episode_dict) for each demo in the HDF5 file."""
         with h5py.File(hdf5_path, "r") as f:
-            demo_keys = sorted(
+            all_keys = sorted(
                 f["data"].keys(), key=lambda k: int(k.split("_")[1])
             )
+        train_keys = all_keys[: -self._NUM_VAL]
+        val_keys = all_keys[-self._NUM_VAL :]
+        return {
+            "train": self._generate_examples(hdf5_path, demo_keys=train_keys),
+            "val": self._generate_examples(hdf5_path, demo_keys=val_keys),
+        }
+
+    def _generate_examples(self, hdf5_path: str, demo_keys: list[str] | None = None):
+        """Yield (key, episode_dict) for each demo in the HDF5 file."""
+        with h5py.File(hdf5_path, "r") as f:
+            if demo_keys is None:
+                demo_keys = sorted(
+                    f["data"].keys(), key=lambda k: int(k.split("_")[1])
+                )
             for demo_idx, demo_key in enumerate(demo_keys):
                 ep = f[f"data/{demo_key}"]
                 actions_4 = np.asarray(ep["actions"], dtype=np.float32)
@@ -192,11 +224,17 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                     ep["obs/board_state"], dtype=np.float32
                 )
 
+<<<<<<< HEAD
                 actions_4d = _extract_action_4d(actions_4)
                 # Remap legacy gripper values from {0, 1} to {-1, +1} when needed.
                 gripper = actions_4d[:, 3]
                 if np.all((gripper >= 0.0) & (gripper <= 1.0)):
                     actions_4d[:, 3] = 2.0 * gripper - 1.0
+=======
+                actions_4d = _standardize_gripper_for_openvla(_extract_action_4d(actions_4))
+                # Convert benchmark env gripper commands (-1=open, +1=close)
+                # to OpenVLA's absolute training convention (1=open, 0=close).
+>>>>>>> benchmark-fix-updated
                 row, col = _derive_target_from_board_state(board_state)
 
                 # Deduplicate near-identical frames (idle/settling segments)

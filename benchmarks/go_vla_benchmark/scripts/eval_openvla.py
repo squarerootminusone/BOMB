@@ -48,12 +48,11 @@ from experiments.robot.openvla_utils import (
 )
 from experiments.robot.robot_utils import (
     get_image_resize_size,
-    normalize_gripper_action,
-    invert_gripper_action,
     set_seed_everywhere,
 )
 from prismatic.vla.constants import NUM_ACTIONS_CHUNK
 
+from go_vla_benchmark.openvla_action_utils import openvla_action_to_benchmark
 from go_vla_benchmark.env_factory import create_benchmark_env
 
 logging.basicConfig(
@@ -117,14 +116,8 @@ def make_instruction(row: int, col: int, seed: int = 0) -> str:
 
 
 def process_action_for_env(action: np.ndarray) -> np.ndarray:
-    """Process model output action for the Go environment.
-
-    The RLDS dataloader normalizes gripper to [0,1] (0=close, 1=open).
-    The Go env expects gripper in [-1, 1] (-1=open, 1=close).
-    """
-    action = normalize_gripper_action(action, binarize=True)
-    action = invert_gripper_action(action)
-    return action
+    """Convert an OpenVLA action into benchmark env semantics."""
+    return openvla_action_to_benchmark(action, binarize=True)
 
 
 def run_episode(

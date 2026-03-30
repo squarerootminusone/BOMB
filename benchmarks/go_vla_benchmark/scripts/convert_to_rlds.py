@@ -55,14 +55,14 @@ def main() -> None:
     print(f"  Data dir     : {builder.data_dir}")
     print(f"  Description  : {info.description.strip()[:120]}...")
 
-    ds = builder.as_dataset(split="train")
-    num_episodes = 0
-    total_steps = 0
-    for episode in ds:
-        num_episodes += 1
-        total_steps += sum(1 for _ in episode["steps"])
-    print(f"  Episodes     : {num_episodes}")
-    print(f"  Total steps  : {total_steps}")
+    for split_name in ["train", "val"]:
+        ds = builder.as_dataset(split=split_name)
+        num_episodes = 0
+        total_steps = 0
+        for episode in ds:
+            num_episodes += 1
+            total_steps += sum(1 for _ in episode["steps"])
+        print(f"  [{split_name:5s}] Episodes: {num_episodes}  Steps: {total_steps}")
     print(f"  Source HDF5  : {hdf5_path}")
 
 
