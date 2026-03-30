@@ -99,8 +99,16 @@ def main() -> None:
         )
 
     gripper = actions[:, 3]
-    if gripper.min() >= -1.0 and gripper.max() <= 1.0:
-        print("  [OK] Gripper dim 3 is within [-1, 1].")
+    if gripper.min() >= 0.0 and gripper.max() <= 1.0:
+        print(
+            "  [OK] Gripper dim 3 uses OpenVLA convention [0, 1] "
+            "(1=open, 0=close)."
+        )
+    elif gripper.min() >= -1.0 and gripper.max() <= 1.0:
+        print(
+            "  [WARN] Gripper dim 3 looks like raw benchmark/env semantics "
+            "[-1, 1] instead of OpenVLA's [0, 1] convention."
+        )
     else:
         print(
             f"  [INFO] Gripper dim 3 range: [{gripper.min():.4f}, {gripper.max():.4f}]"

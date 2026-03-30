@@ -126,15 +126,32 @@ python benchmarks/go_vla_benchmark/scripts/convert_to_rlds.py \
     --input benchmarks/go_vla_benchmark/data/source_go.hdf5
 ```
 
+The OpenVLA training path expects the converted RLDS dataset to expose the
+gripper as an absolute command in `[0, 1]` with `1=open` and `0=close`, while
+the simulator still uses raw env commands `-1=open`, `+1=close`. You can
+confirm the built dataset with:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/verify_rlds.py
+```
+
 ## Training
 
 ### OpenVLA (QLoRA)
 
 ```bash
 MUJOCO_GL=egl PYTHONPATH=openvla python openvla/vla-scripts/finetune.py \
-    training.batch_size=4 training.grad_accumulation_steps=32 \
-    lora.enabled=true lora.quantization=true lora.rank=32 \
-    training.epochs=20 training.val_steps=25
+    --data_root_dir ~/tensorflow_datasets \
+    --dataset_name go_vla_dataset \
+    --run_root_dir outputs/openvla \
+    --adapter_tmp_dir outputs/openvla_tmp \
+    --batch_size 4 \
+    --grad_accumulation_steps 32 \
+    --lora_rank 32 \
+    --use_lora True \
+    --use_quantization True \
+    --learning_rate 5e-4 \
+    --save_steps 500
 ```
 
 ### SpatialVLA (LoRA)
