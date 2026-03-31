@@ -8,10 +8,10 @@ data:
   image_aug: true
 
 training:
-  batch_size: 16
+  batch_size: 4
   epochs: 20
   learning_rate: 5e-4
-  grad_accumulation_steps: 8
+  grad_accumulation_steps: 32
   gradient_checkpointing: false
   val_steps: 100
 
