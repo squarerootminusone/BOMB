@@ -4,7 +4,7 @@ vla_path: openvla/openvla-7b
 data:
   root_dir: ~/tensorflow_datasets
   dataset_name: go_vla_dataset
-  shuffle_buffer_size: 100000
+  shuffle_buffer_size: 10000
   image_aug: false
 
 training:
