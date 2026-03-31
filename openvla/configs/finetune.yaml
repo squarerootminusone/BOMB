@@ -10,7 +10,7 @@ data:
 training:
   batch_size: 4
   epochs: 20
-  learning_rate: 5e-4
+  learning_rate: 5e-5
   grad_accumulation_steps: 32
   gradient_checkpointing: false
   val_steps: 100
