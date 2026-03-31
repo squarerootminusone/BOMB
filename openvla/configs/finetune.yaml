@@ -19,7 +19,7 @@ lora:
   enabled: true
   rank: 32
   dropout: 0.0
-  quantization: true
+  quantization: false
 
 resume_from: null  # path to resume/ dir from a previous run
 
