@@ -52,6 +52,15 @@ SYSTEM_PROMPT = (
 )
 
 
+def _find_dataset_statistics_path(model_path: Path) -> Path | None:
+    candidates = [model_path / "dataset_statistics.json"]
+    candidates.extend(parent / "dataset_statistics.json" for parent in model_path.parents)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def get_openvla_prompt(instruction: str, model_path: str) -> str:
     if "v01" in model_path:
         return f"{SYSTEM_PROMPT} USER: What action should the robot take to {instruction.lower()}? ASSISTANT:"
@@ -129,13 +138,13 @@ def main() -> None:
         vla = vla.to(device)
 
     # Load dataset statistics for action denormalization
-    stats_path = model_path / "dataset_statistics.json"
-    if stats_path.exists():
+    stats_path = _find_dataset_statistics_path(model_path)
+    if stats_path is not None:
         with open(stats_path) as f:
             vla.norm_stats = json.load(f)
         print(f"Loaded norm stats from {stats_path}")
     else:
-        print(f"WARNING: {stats_path} not found, actions will not be denormalized correctly")
+        print("WARNING: dataset_statistics.json not found; actions will not be denormalized correctly")
 
     vla.eval()
 

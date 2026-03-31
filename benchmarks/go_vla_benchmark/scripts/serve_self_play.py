@@ -91,6 +91,15 @@ _INSTRUCTION_TEMPLATES = [
 SELF, OPPONENT = 0, 1
 
 
+def _find_dataset_statistics_path(model_path: Path) -> Path | None:
+    candidates = [model_path / "dataset_statistics.json"]
+    candidates.extend(parent / "dataset_statistics.json" for parent in model_path.parents)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -754,11 +763,13 @@ def _startup() -> None:
     vla = AutoModelForVision2Seq.from_pretrained(str(model_path), **load_kwargs)
     if not args.load_4bit:
         vla = vla.to(device)
-    stats_path = model_path / "dataset_statistics.json"
-    if stats_path.exists():
+    stats_path = _find_dataset_statistics_path(model_path)
+    if stats_path is not None:
         with open(stats_path) as f:
             vla.norm_stats = json.load(f)
         print(f"Loaded norm stats from {stats_path}")
+    else:
+        print("WARNING: dataset_statistics.json not found; actions may not be denormalized correctly")
     vla.eval()
 
     # --- Create environment ---

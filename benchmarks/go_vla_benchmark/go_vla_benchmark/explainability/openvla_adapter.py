@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -80,6 +82,19 @@ def _safe_register(auto_class, key, value) -> None:
         auto_class.register(key, value)
     except ValueError:
         pass
+
+
+def _find_dataset_statistics_path(checkpoint: str) -> Optional[Path]:
+    checkpoint_path = Path(checkpoint).expanduser()
+    if not checkpoint_path.exists():
+        return None
+
+    candidates = [checkpoint_path / "dataset_statistics.json"]
+    candidates.extend(parent / "dataset_statistics.json" for parent in checkpoint_path.parents)
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _ensure_openvla_imports():
@@ -398,6 +413,10 @@ class OpenVLAExplainabilityAdapter:
         self.processor = AutoProcessor.from_pretrained(checkpoint, trust_remote_code=True)
         if not load_in_8bit and not load_in_4bit:
             self.model = self.model.to(self.device)
+        stats_path = _find_dataset_statistics_path(checkpoint)
+        if stats_path is not None:
+            with open(stats_path) as f:
+                self.model.norm_stats = json.load(f)
         self.model.eval()
 
         if action_dim is not None:
