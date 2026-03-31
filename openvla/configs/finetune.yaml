@@ -6,10 +6,19 @@ data:
   dataset_name: go_vla_dataset
   shuffle_buffer_size: 100000
   image_aug: true
+  patch_mask:
+    enabled: true
+    mask_probability: 0.25
+    patch_size: 32
+    patches_per_image: 1
+    fill_mode: scene_start_mean
+    fill_value: 127
+    seed: null
 
 training:
   batch_size: 1
   epochs: 20
+  max_steps: 500
   learning_rate: 5e-4
   grad_accumulation_steps: 1
   gradient_checkpointing: true

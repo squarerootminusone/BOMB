@@ -51,6 +51,7 @@ def make_dataset_from_rlds(
     dataset_statistics: Optional[Union[dict, str]] = None,
     absolute_action_mask: Optional[List[bool]] = None,
     action_normalization_mask: Optional[List[bool]] = None,
+    include_scene_start_frame: bool = False,
     num_parallel_reads: int = tf.data.AUTOTUNE,
     num_parallel_calls: int = tf.data.AUTOTUNE,
 ) -> Tuple[dl.DLataset, dict]:
@@ -178,6 +179,10 @@ def make_dataset_from_rlds(
                     f"Language key {language_key} has dtype {traj[language_key].dtype}, " "but it must be tf.string."
                 )
             task["language_instruction"] = traj.pop(language_key)
+        if include_scene_start_frame:
+            primary_obs_key = image_obs_keys.get("primary")
+            if primary_obs_key is not None:
+                task["scene_start_primary_bytes"] = tf.repeat(old_obs[primary_obs_key][:1], traj_len, axis=0)
 
         traj = {
             "observation": new_obs,

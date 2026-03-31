@@ -41,7 +41,7 @@ import wandb
 from prismatic.models.backbones.llm.prompting import PurePromptBuilder, VicunaV15ChatPromptBuilder
 from prismatic.util.data_utils import PaddedCollatorForActionPrediction
 from prismatic.vla.action_tokenizer import ActionTokenizer
-from prismatic.vla.datasets import RLDSBatchTransform, RLDSDataset
+from prismatic.vla.datasets import RandomPatchMaskConfig, RLDSBatchTransform, RLDSDataset
 from prismatic.vla.datasets.rlds.utils.data_utils import save_dataset_statistics
 
 from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
@@ -71,6 +71,21 @@ except Exception:
 
 # Sane Defaults
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
+def _build_patch_mask_config(cfg: DictConfig):
+    patch_mask_cfg = cfg.data.get("patch_mask")
+    if patch_mask_cfg is None or not patch_mask_cfg.get("enabled", False):
+        return None
+
+    return RandomPatchMaskConfig(
+        mask_probability=float(patch_mask_cfg.get("mask_probability", 0.25)),
+        patch_size=int(patch_mask_cfg.get("patch_size", 32)),
+        patches_per_image=int(patch_mask_cfg.get("patches_per_image", 1)),
+        fill_mode=str(patch_mask_cfg.get("fill_mode", "constant")),
+        fill_value=int(patch_mask_cfg.get("fill_value", 127)),
+        seed=None if patch_mask_cfg.get("seed") is None else int(patch_mask_cfg.seed),
+    )
 
 
 @torch.no_grad()
@@ -282,6 +297,13 @@ def finetune(cfg: DictConfig) -> None:
         exp_id += "+q-4bit"
     if cfg.data.image_aug:
         exp_id += "--image_aug"
+    if cfg.data.get("patch_mask") and cfg.data.patch_mask.enabled:
+        exp_id += (
+            f"--patch_mask-p{int(float(cfg.data.patch_mask.mask_probability) * 100)}"
+            f"-n{int(cfg.data.patch_mask.patches_per_image)}"
+            f"-s{int(cfg.data.patch_mask.patch_size)}"
+            f"-fill-{str(cfg.data.patch_mask.fill_mode)}"
+        )
 
     # Quantization Config =>> only if LoRA fine-tuning
     quantization_config = None
@@ -358,11 +380,13 @@ def finetune(cfg: DictConfig) -> None:
     action_tokenizer = ActionTokenizer(processor.tokenizer)
 
     # Load Fine-tuning Dataset (train split)
+    patch_mask_config = _build_patch_mask_config(cfg)
     batch_transform = RLDSBatchTransform(
         action_tokenizer,
         processor.tokenizer,
         image_transform=processor.image_processor.apply_transform,
         prompt_builder_fn=PurePromptBuilder if "v01" not in cfg.vla_path else VicunaV15ChatPromptBuilder,
+        random_patch_mask=patch_mask_config,
     )
     vla_dataset = RLDSDataset(
         Path(cfg.data.root_dir).expanduser(),
@@ -392,8 +416,15 @@ def finetune(cfg: DictConfig) -> None:
 
     # Compute max_steps from epochs and dataset size
     steps_per_epoch = len(vla_dataset) // (cfg.training.batch_size * cfg.training.grad_accumulation_steps)
-    max_steps = cfg.training.epochs * steps_per_epoch
-    print(f"  {cfg.training.epochs} epochs x {steps_per_epoch} steps/epoch ({len(vla_dataset)} samples) = {max_steps} total gradient steps")
+    epoch_limited_steps = cfg.training.epochs * steps_per_epoch
+    configured_max_steps = cfg.training.get("max_steps")
+    max_steps = epoch_limited_steps if configured_max_steps is None else int(configured_max_steps)
+    if max_steps <= 0:
+        raise ValueError(f"max_steps must be positive, got {max_steps}")
+    print(
+        f"  {cfg.training.epochs} epochs x {steps_per_epoch} steps/epoch ({len(vla_dataset)} samples)"
+        f" = {epoch_limited_steps} possible gradient steps; using max_steps={max_steps}"
+    )
 
     # [Important] Save Dataset Statistics =>> used to de-normalize actions for inference!
     if distributed_state.is_main_process:
@@ -448,6 +479,7 @@ def finetune(cfg: DictConfig) -> None:
     recent_losses = deque(maxlen=cfg.training.grad_accumulation_steps)
     recent_action_accuracies = deque(maxlen=cfg.training.grad_accumulation_steps)
     recent_l1_losses = deque(maxlen=cfg.training.grad_accumulation_steps)
+    recent_masked_sample_rates = deque(maxlen=cfg.training.grad_accumulation_steps)
 
     # Initial validation before training starts
     if distributed_state.is_main_process:
@@ -510,11 +542,16 @@ def finetune(cfg: DictConfig) -> None:
                 action_tokenizer.decode_token_ids_to_actions(action_gt[mask].cpu().numpy())
             )
             action_l1_loss = torch.nn.functional.l1_loss(continuous_actions_pred, continuous_actions_gt)
+            masked_sample_rate = None
+            if "patch_mask_applied" in batch:
+                masked_sample_rate = batch["patch_mask_applied"].float().mean().item()
 
             # Store recent train metrics
             recent_losses.append(loss.item())
             recent_action_accuracies.append(action_accuracy.item())
             recent_l1_losses.append(action_l1_loss.item())
+            if masked_sample_rate is not None:
+                recent_masked_sample_rates.append(masked_sample_rate)
 
             # Compute gradient step index
             gradient_step_idx = batch_idx // cfg.training.grad_accumulation_steps
@@ -523,13 +560,21 @@ def finetune(cfg: DictConfig) -> None:
             smoothened_loss = sum(recent_losses) / len(recent_losses)
             smoothened_action_accuracy = sum(recent_action_accuracies) / len(recent_action_accuracies)
             smoothened_l1_loss = sum(recent_l1_losses) / len(recent_l1_losses)
+            smoothened_masked_sample_rate = (
+                sum(recent_masked_sample_rates) / len(recent_masked_sample_rates)
+                if recent_masked_sample_rates
+                else None
+            )
 
             # Update progress bar with live metrics
-            progress.set_postfix(
-                loss=f"{smoothened_loss:.4f}",
-                acc=f"{smoothened_action_accuracy:.3f}",
-                l1=f"{smoothened_l1_loss:.4f}",
-            )
+            progress_metrics = {
+                "loss": f"{smoothened_loss:.4f}",
+                "acc": f"{smoothened_action_accuracy:.3f}",
+                "l1": f"{smoothened_l1_loss:.4f}",
+            }
+            if smoothened_masked_sample_rate is not None:
+                progress_metrics["mask"] = f"{smoothened_masked_sample_rate:.3f}"
+            progress.set_postfix(**progress_metrics)
 
             # Push Metrics to W&B (every 10 gradient steps)
             if distributed_state.is_main_process and use_wandb and gradient_step_idx % 10 == 0:
@@ -538,6 +583,11 @@ def finetune(cfg: DictConfig) -> None:
                         "train_loss": smoothened_loss,
                         "action_accuracy": smoothened_action_accuracy,
                         "l1_loss": smoothened_l1_loss,
+                        **(
+                            {"masked_sample_rate": smoothened_masked_sample_rate}
+                            if smoothened_masked_sample_rate is not None
+                            else {}
+                        ),
                     },
                     step=gradient_step_idx,
                 )
@@ -625,7 +675,7 @@ def finetune(cfg: DictConfig) -> None:
                 )
 
             # Stop training when max_steps is reached
-            if gradient_step_idx == max_steps:
+            if (batch_idx + 1) % cfg.training.grad_accumulation_steps == 0 and (gradient_step_idx + 1) >= max_steps:
                 print(f"Max step {max_steps} reached! Stopping training...")
                 break
 

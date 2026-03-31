@@ -6,8 +6,9 @@ format to OpenVLA, IterableDataset shim.
 """
 
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, Tuple, Type
+from typing import Any, Dict, Optional, Tuple, Type
 
 import numpy as np
 import torch
@@ -28,17 +29,90 @@ IGNORE_INDEX = -100
 
 
 @dataclass
+class RandomPatchMaskConfig:
+    mask_probability: float = 0.25
+    patch_size: int = 32
+    patches_per_image: int = 1
+    fill_mode: str = "constant"
+    fill_value: int = 127
+    seed: Optional[int] = None
+
+
+class RandomPatchMasker:
+    def __init__(self, config: RandomPatchMaskConfig) -> None:
+        if not 0.0 <= config.mask_probability <= 1.0:
+            raise ValueError(f"mask_probability must be in [0, 1], got {config.mask_probability}")
+        if config.patch_size <= 0:
+            raise ValueError(f"patch_size must be positive, got {config.patch_size}")
+        if config.patches_per_image <= 0:
+            raise ValueError(f"patches_per_image must be positive, got {config.patches_per_image}")
+        if config.fill_mode not in {"constant", "scene_start_mean"}:
+            raise ValueError(f"fill_mode must be 'constant' or 'scene_start_mean', got {config.fill_mode}")
+        if not 0 <= config.fill_value <= 255:
+            raise ValueError(f"fill_value must be in [0, 255], got {config.fill_value}")
+
+        self.config = config
+        self.rng = np.random.default_rng(config.seed)
+
+    def _resolve_fill_value(self, scene_start_img: Optional[Image.Image]) -> np.ndarray:
+        if self.config.fill_mode == "scene_start_mean" and scene_start_img is not None:
+            scene_start_np = np.asarray(scene_start_img.convert("RGB"), dtype=np.float32)
+            return np.rint(scene_start_np.mean(axis=(0, 1))).astype(np.uint8)
+        return np.asarray(self.config.fill_value, dtype=np.uint8)
+
+    def __call__(self, img: Image.Image, scene_start_img: Optional[Image.Image] = None) -> Tuple[Image.Image, bool]:
+        if self.rng.random() >= self.config.mask_probability:
+            return img, False
+
+        img_np = np.array(img, copy=True)
+        height, width = img_np.shape[:2]
+        patch_size = min(self.config.patch_size, height, width)
+        max_top = height - patch_size
+        max_left = width - patch_size
+        fill_value = self._resolve_fill_value(scene_start_img)
+
+        for _ in range(self.config.patches_per_image):
+            top = int(self.rng.integers(0, max_top + 1)) if max_top > 0 else 0
+            left = int(self.rng.integers(0, max_left + 1)) if max_left > 0 else 0
+            img_np[top : top + patch_size, left : left + patch_size] = fill_value
+
+        return Image.fromarray(img_np), True
+
+
+@dataclass
 class RLDSBatchTransform:
     action_tokenizer: ActionTokenizer
     base_tokenizer: PreTrainedTokenizerBase
     image_transform: ImageTransform
     prompt_builder_fn: Type[PromptBuilder]
     predict_stop_token: bool = True
+    random_patch_mask: Optional[RandomPatchMaskConfig] = None
+
+    def __post_init__(self) -> None:
+        self.patch_masker = None if self.random_patch_mask is None else RandomPatchMasker(self.random_patch_mask)
+
+    @staticmethod
+    def _decode_image_like(image_like: Any) -> Optional[Image.Image]:
+        if image_like is None:
+            return None
+        if isinstance(image_like, Image.Image):
+            return image_like.convert("RGB")
+        if isinstance(image_like, bytes):
+            return Image.open(BytesIO(image_like)).convert("RGB")
+        if isinstance(image_like, np.ndarray):
+            if image_like.dtype == np.uint8:
+                return Image.fromarray(image_like).convert("RGB")
+            return Image.fromarray(np.asarray(image_like, dtype=np.uint8)).convert("RGB")
+        return None
 
     def __call__(self, rlds_batch: Dict[str, Any]) -> Dict[str, Any]:
         """Converts a RLDS batch to the format expected by the OpenVLA collator/models."""
         dataset_name, action = rlds_batch["dataset_name"], rlds_batch["action"][0]
         img = Image.fromarray(rlds_batch["observation"]["image_primary"][0])
+        patch_mask_applied = False
+        if self.patch_masker is not None:
+            scene_start_img = self._decode_image_like(rlds_batch["task"].get("scene_start_primary_bytes"))
+            img, patch_mask_applied = self.patch_masker(img, scene_start_img=scene_start_img)
         lang = rlds_batch["task"]["language_instruction"].decode().lower()
 
         # Construct Chat-based Prompt =>> Input is default query + language instruction, output are the action tokens
@@ -64,7 +138,10 @@ class RLDSBatchTransform:
         if not self.predict_stop_token:
             labels[-1] = IGNORE_INDEX
 
-        return dict(pixel_values=pixel_values, input_ids=input_ids, labels=labels, dataset_name=dataset_name)
+        output = dict(pixel_values=pixel_values, input_ids=input_ids, labels=labels, dataset_name=dataset_name)
+        if self.patch_masker is not None:
+            output["patch_mask_applied"] = torch.tensor(float(patch_mask_applied), dtype=torch.float32)
+        return output
 
 
 class RLDSDataset(IterableDataset):
@@ -98,6 +175,13 @@ class RLDSDataset(IterableDataset):
             load_language=True,
             action_proprio_normalization_type=NormalizationType.BOUNDS_Q99,
         )
+        include_scene_start_frame = (
+            self.batch_transform.random_patch_mask is not None
+            and self.batch_transform.random_patch_mask.fill_mode == "scene_start_mean"
+        )
+        if include_scene_start_frame:
+            for dataset_kwargs in per_dataset_kwargs:
+                dataset_kwargs["include_scene_start_frame"] = True
         rlds_config = dict(
             traj_transform_kwargs=dict(
                 window_size=1,                                      # If we wanted to feed / predict more than one step
