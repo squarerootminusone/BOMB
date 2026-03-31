@@ -85,6 +85,10 @@ rsync -avP -e "ssh -i $KEY -p $PORT" \
   "$LOCAL_REPO/data"
 ```
 
+```bash
+rsync -avP -e "ssh -i $KEY -p $PORT" "$LOCAL_REPO/tensorflow_datasets" "$CLOUD:tensorflow_datasets" 
+```
+
 ```
 conda run --no-capture-output -n main \
   python benchmarks/go_vla_benchmark/scripts/convert_to_rlds.py \

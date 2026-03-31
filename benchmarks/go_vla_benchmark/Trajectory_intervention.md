@@ -41,7 +41,8 @@ The report layout stays publication-style:
   spans or patch candidates from the reference frame instead of rerunning one
   identical mask repeatedly
 - each masked rollout is annotated inline with its selected mask label
-- the legend stays at the bottom
+- the bottom legend also lists every masked attempt and the text span / patch
+  chosen for that rollout
 - the exported PNG contains no extra GUI text
 
 The plotted trajectory is the arm / end-effector path shown in a true top-down

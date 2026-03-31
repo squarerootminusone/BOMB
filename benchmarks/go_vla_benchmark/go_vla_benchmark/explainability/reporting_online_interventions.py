@@ -37,6 +37,7 @@ ATTEMPT_ACCENT_COLORS = (
     (234, 88, 12, 255),
     (22, 163, 74, 255),
 )
+MASK_LEGEND_HEADER = (62, 74, 89, 255)
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -481,6 +482,62 @@ def _attempt_label_text(attempt: OnlineInterventionAttempt) -> str:
     return f"{int(attempt.attempt_index)}. {mask_label}"
 
 
+def _draw_mask_attempt_legend(
+    draw: ImageDraw.ImageDraw,
+    *,
+    attempts: Sequence[OnlineInterventionAttempt],
+    box: tuple[int, int, int, int],
+) -> None:
+    if not attempts:
+        return
+
+    header_font = _load_font(28)
+    item_font = _load_font(24)
+    left, top, right, bottom = box
+    draw.text((left, top), "Masked Attempts", fill=MASK_LEGEND_HEADER, font=header_font)
+    _header_w, header_h = _text_size(draw, "Masked Attempts", font=header_font)
+
+    item_top = top + header_h + 16
+    item_height = 34
+    row_gap = 16
+    x = left
+    y = item_top
+    max_item_width = min(520, max(220, right - left))
+
+    for attempt in attempts:
+        accent = _attempt_accent_color(attempt.attempt_index)
+        label = _fit_label_text(
+            draw,
+            _attempt_label_text(attempt),
+            font=item_font,
+            max_width=max_item_width - 42,
+        )
+        label_w, label_h = _text_size(draw, label, font=item_font)
+        item_width = min(max_item_width, label_w + 42)
+
+        if (x + item_width) > right and x > left:
+            x = left
+            y += item_height + row_gap
+        if (y + item_height) > bottom:
+            break
+
+        swatch_y = y + int(round((item_height - 10) * 0.5))
+        draw.rounded_rectangle(
+            (x, swatch_y, x + 24, swatch_y + 10),
+            radius=5,
+            fill=accent,
+            outline=(255, 255, 255, 255),
+            width=1,
+        )
+        draw.text(
+            (x + 34, y + int(round((item_height - label_h) * 0.5)) - 1),
+            label,
+            fill=LEGEND_TEXT,
+            font=item_font,
+        )
+        x += item_width + 28
+
+
 def _draw_attempt_labels(
     draw: ImageDraw.ImageDraw,
     *,
@@ -728,12 +785,12 @@ def export_online_intervention_report_png(
         raise ValueError(f"unsupported trajectory alpha mode: {trajectory_alpha_mode}")
 
     canvas_w = 2200
-    canvas_h = 1200
+    canvas_h = 1320
     margin_x = 54
     margin_top = 50
     margin_bottom = 46
     panel_gap = 40
-    legend_h = 190
+    legend_h = 310
     panel_h = canvas_h - margin_top - margin_bottom - legend_h
     panel_w = int((canvas_w - (2 * margin_x) - panel_gap) / 2)
 
@@ -833,6 +890,17 @@ def export_online_intervention_report_png(
         draw.text((marker_x + 28, marker_y), label, fill=LEGEND_TEXT, font=marker_font)
         text_w, _ = _text_size(draw, label, font=marker_font)
         marker_x += text_w + 172
+
+    _draw_mask_attempt_legend(
+        draw,
+        attempts=report.masked_attempts,
+        box=(
+            margin_x + 20,
+            legend_y + 112,
+            canvas_w - margin_x - 20,
+            canvas_h - margin_bottom + 8,
+        ),
+    )
 
     image.convert("RGB").save(output_path)
     return output_path

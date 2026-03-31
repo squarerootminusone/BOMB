@@ -1529,6 +1529,9 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             image = np.asarray(Image.open(png_path), dtype=np.uint8)
             self.assertTrue(np.any(np.all(image == np.asarray([37, 99, 235], dtype=np.uint8), axis=-1)))
             self.assertTrue(np.any(np.all(image == np.asarray([219, 39, 119], dtype=np.uint8), axis=-1)))
+            bottom_strip = image[-180:, :, :]
+            self.assertTrue(np.any(np.all(bottom_strip == np.asarray([37, 99, 235], dtype=np.uint8), axis=-1)))
+            self.assertTrue(np.any(np.all(bottom_strip == np.asarray([219, 39, 119], dtype=np.uint8), axis=-1)))
 
     def test_infer_online_task_phase_is_monotonic(self) -> None:
         source_xyz = np.asarray([0.0, 0.0, 0.8], dtype=np.float32)
