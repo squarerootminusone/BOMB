@@ -77,11 +77,13 @@ def _build_patch_mask_config(cfg: DictConfig):
     patch_mask_cfg = cfg.data.get("patch_mask")
     if patch_mask_cfg is None or not patch_mask_cfg.get("enabled", False):
         return None
+    patch_count = patch_mask_cfg.get("num_patches", patch_mask_cfg.get("patches_per_image", 1))
 
     return RandomPatchMaskConfig(
         mask_probability=float(patch_mask_cfg.get("mask_probability", 0.25)),
         patch_size=int(patch_mask_cfg.get("patch_size", 32)),
-        patches_per_image=int(patch_mask_cfg.get("patches_per_image", 1)),
+        patches_per_image=int(patch_count),
+        placement_mode=str(patch_mask_cfg.get("placement_mode", "grid_unique")),
         fill_mode=str(patch_mask_cfg.get("fill_mode", "constant")),
         fill_value=int(patch_mask_cfg.get("fill_value", 127)),
         seed=None if patch_mask_cfg.get("seed") is None else int(patch_mask_cfg.seed),
@@ -298,10 +300,12 @@ def finetune(cfg: DictConfig) -> None:
     if cfg.data.image_aug:
         exp_id += "--image_aug"
     if cfg.data.get("patch_mask") and cfg.data.patch_mask.enabled:
+        patch_count = int(cfg.data.patch_mask.get("num_patches", cfg.data.patch_mask.get("patches_per_image", 1)))
         exp_id += (
             f"--patch_mask-p{int(float(cfg.data.patch_mask.mask_probability) * 100)}"
-            f"-n{int(cfg.data.patch_mask.patches_per_image)}"
+            f"-n{patch_count}"
             f"-s{int(cfg.data.patch_mask.patch_size)}"
+            f"-mode-{str(cfg.data.patch_mask.get('placement_mode', 'grid_unique'))}"
             f"-fill-{str(cfg.data.patch_mask.fill_mode)}"
         )
 

@@ -33,6 +33,7 @@ class RandomPatchMaskConfig:
     mask_probability: float = 0.25
     patch_size: int = 32
     patches_per_image: int = 1
+    placement_mode: str = "grid_unique"
     fill_mode: str = "constant"
     fill_value: int = 127
     seed: Optional[int] = None
@@ -46,6 +47,10 @@ class RandomPatchMasker:
             raise ValueError(f"patch_size must be positive, got {config.patch_size}")
         if config.patches_per_image <= 0:
             raise ValueError(f"patches_per_image must be positive, got {config.patches_per_image}")
+        if config.placement_mode not in {"grid_unique", "free_non_overlapping"}:
+            raise ValueError(
+                f"placement_mode must be 'grid_unique' or 'free_non_overlapping', got {config.placement_mode}"
+            )
         if config.fill_mode not in {"constant", "scene_start_mean"}:
             raise ValueError(f"fill_mode must be 'constant' or 'scene_start_mean', got {config.fill_mode}")
         if not 0 <= config.fill_value <= 255:
@@ -53,6 +58,65 @@ class RandomPatchMasker:
 
         self.config = config
         self.rng = np.random.default_rng(config.seed)
+
+    @staticmethod
+    def _rectangles_overlap(rect_a: Tuple[int, int, int, int], rect_b: Tuple[int, int, int, int]) -> bool:
+        top_a, left_a, bottom_a, right_a = rect_a
+        top_b, left_b, bottom_b, right_b = rect_b
+        return not (
+            bottom_a <= top_b
+            or bottom_b <= top_a
+            or right_a <= left_b
+            or right_b <= left_a
+        )
+
+    def _sample_grid_unique_rectangles(
+        self, height: int, width: int, patch_size: int
+    ) -> Tuple[Tuple[int, int, int, int], ...]:
+        top_positions = list(range(0, height - patch_size + 1, patch_size)) or [0]
+        left_positions = list(range(0, width - patch_size + 1, patch_size)) or [0]
+        all_rects = [
+            (top, left, top + patch_size, left + patch_size)
+            for top in top_positions
+            for left in left_positions
+        ]
+        if self.config.patches_per_image > len(all_rects):
+            raise ValueError(
+                f"num_patches={self.config.patches_per_image} exceeds available non-overlapping grid cells "
+                f"({len(all_rects)}) for image size {(height, width)} and patch_size={patch_size}"
+            )
+        chosen_indices = self.rng.choice(len(all_rects), size=self.config.patches_per_image, replace=False)
+        return tuple(all_rects[int(idx)] for idx in np.atleast_1d(chosen_indices))
+
+    def _sample_free_non_overlapping_rectangles(
+        self, height: int, width: int, patch_size: int
+    ) -> Tuple[Tuple[int, int, int, int], ...]:
+        max_top = height - patch_size
+        max_left = width - patch_size
+        selected = []
+        max_attempts = max(128, self.config.patches_per_image * 256)
+
+        for _ in range(max_attempts):
+            if len(selected) >= self.config.patches_per_image:
+                break
+            top = int(self.rng.integers(0, max_top + 1)) if max_top > 0 else 0
+            left = int(self.rng.integers(0, max_left + 1)) if max_left > 0 else 0
+            candidate = (top, left, top + patch_size, left + patch_size)
+            if any(self._rectangles_overlap(candidate, existing) for existing in selected):
+                continue
+            selected.append(candidate)
+
+        if len(selected) != self.config.patches_per_image:
+            raise ValueError(
+                f"Could not place {self.config.patches_per_image} non-overlapping free-form patches for "
+                f"image size {(height, width)} and patch_size={patch_size}; try fewer patches or grid_unique mode."
+            )
+        return tuple(selected)
+
+    def _sample_patch_rectangles(self, height: int, width: int, patch_size: int) -> Tuple[Tuple[int, int, int, int], ...]:
+        if self.config.placement_mode == "grid_unique":
+            return self._sample_grid_unique_rectangles(height=height, width=width, patch_size=patch_size)
+        return self._sample_free_non_overlapping_rectangles(height=height, width=width, patch_size=patch_size)
 
     def _resolve_fill_value(self, scene_start_img: Optional[Image.Image]) -> np.ndarray:
         if self.config.fill_mode == "scene_start_mean" and scene_start_img is not None:
@@ -67,14 +131,14 @@ class RandomPatchMasker:
         img_np = np.array(img, copy=True)
         height, width = img_np.shape[:2]
         patch_size = min(self.config.patch_size, height, width)
-        max_top = height - patch_size
-        max_left = width - patch_size
         fill_value = self._resolve_fill_value(scene_start_img)
+        patch_rectangles = self._sample_patch_rectangles(height=height, width=width, patch_size=patch_size)
 
-        for _ in range(self.config.patches_per_image):
-            top = int(self.rng.integers(0, max_top + 1)) if max_top > 0 else 0
-            left = int(self.rng.integers(0, max_left + 1)) if max_left > 0 else 0
-            img_np[top : top + patch_size, left : left + patch_size] = fill_value
+        patch_mask = np.zeros((height, width), dtype=bool)
+        for top, left, bottom, right in patch_rectangles:
+            patch_mask[top:bottom, left:right] = True
+
+        img_np[patch_mask] = fill_value
 
         return Image.fromarray(img_np), True
 

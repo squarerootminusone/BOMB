@@ -10,7 +10,8 @@ data:
     enabled: true
     mask_probability: 0.25
     patch_size: 32
-    patches_per_image: 1
+    num_patches: 1
+    placement_mode: grid_unique
     fill_mode: scene_start_mean
     fill_value: 127
     seed: null
