@@ -33,7 +33,7 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     resolve_dataset_path,
     resolve_optional_path,
     resolve_repo_relative_path,
-    select_online_intervention_mask_from_reference,
+    select_online_intervention_masks_from_reference,
 )
 
 
@@ -215,11 +215,12 @@ def main() -> None:
         multi_output = len(demo_specs) > 1
         manifests: list[dict[str, object]] = []
         for demo_spec in demo_specs:
-            selected_mask = select_online_intervention_mask_from_reference(
+            selected_masks = select_online_intervention_masks_from_reference(
                 policy=policy,
                 reference_image=demo_spec.reference_image,
                 instruction=demo_spec.instruction,
                 intervention_kind=args.intervention_kind,
+                max_masks=args.attempts,
             )
             suffix = _safe_name(f"{demo_spec.demo_key}_{args.intervention_kind}")
             report_output_png = _with_suffix(output_png, suffix) if multi_output else output_png
@@ -233,7 +234,7 @@ def main() -> None:
                     report_output_png=report_output_png,
                     report_summary_path=report_summary_path,
                     report_video_path=report_video_path,
-                    report_builder=lambda callback, demo_spec=demo_spec, selected_mask=selected_mask: collect_online_intervention_report(
+                    report_builder=lambda callback, demo_spec=demo_spec, selected_masks=selected_masks: collect_online_intervention_report(
                         policy=policy,
                         env_factory=env_factory,
                         instruction=demo_spec.instruction,
@@ -243,7 +244,8 @@ def main() -> None:
                         masked_attempts=args.attempts,
                         checkpoint=args.checkpoint,
                         intervention_kind=args.intervention_kind,
-                        mask=selected_mask,
+                        mask=selected_masks[0] if selected_masks else None,
+                        masked_attempt_masks=selected_masks,
                         reset_options=GoResetOptions(
                             opening_moves=demo_spec.opening_moves,
                             opening_move_history=demo_spec.opening_move_history,

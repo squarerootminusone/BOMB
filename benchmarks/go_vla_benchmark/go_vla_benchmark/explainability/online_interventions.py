@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-from typing import Callable, Dict, List, Optional, Protocol, Union
+from typing import Callable, Dict, List, Optional, Protocol, Sequence, Union
 
 import numpy as np
 
@@ -358,6 +358,47 @@ def _top_patch_mask_from_scan(scan: InterventionScan) -> PatchMaskCandidateSpec:
     )
 
 
+def _top_patch_masks_from_scan(scan: InterventionScan, *, top_k: int) -> List[PatchMaskCandidateSpec]:
+    effect_map = np.asarray(scan.effect_map, dtype=np.float32)
+    if effect_map.ndim != 2 or effect_map.shape[0] != effect_map.shape[1]:
+        raise ValueError(f"expected square patch effect map, got {effect_map.shape}")
+
+    requested = max(0, int(top_k))
+    if requested <= 0:
+        return []
+
+    grid_side = int(effect_map.shape[0])
+    selected: List[PatchMaskCandidateSpec] = []
+    seen_indices: set[int] = set()
+
+    def add_patch(patch_index: int, label: Optional[str] = None) -> None:
+        patch_index = int(patch_index)
+        if patch_index in seen_indices:
+            return
+        patch_row, patch_col = divmod(patch_index, grid_side)
+        selected.append(
+            PatchMaskCandidateSpec(
+                index=patch_index,
+                label=f"patch ({patch_row}, {patch_col})" if label is None else str(label),
+                patch_row=int(patch_row),
+                patch_col=int(patch_col),
+                grid_side=grid_side,
+            )
+        )
+        seen_indices.add(patch_index)
+
+    for candidate in scan.top_candidates:
+        add_patch(candidate.index, label=candidate.label)
+        if len(selected) >= requested:
+            return selected
+
+    for patch_index in np.argsort(effect_map.reshape(-1))[::-1].tolist():
+        add_patch(int(patch_index))
+        if len(selected) >= requested:
+            break
+    return selected
+
+
 def select_online_intervention_mask_from_reference(
     *,
     policy: OnlineInterventionReferencePolicy,
@@ -365,16 +406,39 @@ def select_online_intervention_mask_from_reference(
     instruction: str,
     intervention_kind: str,
 ) -> OnlineInterventionMaskSpec:
+    masks = select_online_intervention_masks_from_reference(
+        policy=policy,
+        reference_image=reference_image,
+        instruction=instruction,
+        intervention_kind=intervention_kind,
+        max_masks=1,
+    )
+    if not masks:
+        raise RuntimeError("reference-based intervention mask selection returned no candidates")
+    return masks[0]
+
+
+def select_online_intervention_masks_from_reference(
+    *,
+    policy: OnlineInterventionReferencePolicy,
+    reference_image: np.ndarray,
+    instruction: str,
+    intervention_kind: str,
+    max_masks: int = 1,
+) -> List[OnlineInterventionMaskSpec]:
     baseline_step = policy.explain_step(reference_image, instruction)
+    requested = max(0, int(max_masks))
+    if requested <= 0:
+        return []
     kind = str(intervention_kind).strip().lower()
     if kind == "patch":
         patch_scan = policy.patch_occlusion(
             image=reference_image,
             instruction=instruction,
             baseline_step=baseline_step,
-            top_k=1,
+            top_k=requested,
         )
-        return _top_patch_mask_from_scan(patch_scan)
+        return _top_patch_masks_from_scan(patch_scan, top_k=requested)
 
     if kind != "text":
         raise ValueError(f"unsupported intervention kind: {intervention_kind}")
@@ -383,13 +447,28 @@ def select_online_intervention_mask_from_reference(
         image=reference_image,
         instruction=instruction,
         baseline_step=baseline_step,
-        top_k=1,
+        top_k=requested,
     )
-    if text_scan.top_candidates:
-        text_index = int(text_scan.top_candidates[0].index)
-    else:
-        text_index = int(np.argmax(np.asarray(text_scan.effect_map, dtype=np.float32).reshape(-1)))
-    return policy.resolve_text_mask_candidate(instruction, index=text_index)
+    selected_indices: List[int] = []
+    seen_indices: set[int] = set()
+    for candidate in text_scan.top_candidates:
+        text_index = int(candidate.index)
+        if text_index in seen_indices:
+            continue
+        selected_indices.append(text_index)
+        seen_indices.add(text_index)
+        if len(selected_indices) >= requested:
+            break
+    if len(selected_indices) < requested:
+        for text_index in np.argsort(np.asarray(text_scan.effect_map, dtype=np.float32).reshape(-1))[::-1].tolist():
+            text_index = int(text_index)
+            if text_index in seen_indices:
+                continue
+            selected_indices.append(text_index)
+            seen_indices.add(text_index)
+            if len(selected_indices) >= requested:
+                break
+    return [policy.resolve_text_mask_candidate(instruction, index=text_index) for text_index in selected_indices]
 
 
 @dataclass
@@ -680,6 +759,7 @@ def collect_online_intervention_report(
     checkpoint: Optional[str] = None,
     intervention_kind: str = "text",
     mask: Optional[OnlineInterventionMaskSpec] = None,
+    masked_attempt_masks: Optional[Sequence[OnlineInterventionMaskSpec]] = None,
     reset_options: Optional[GoResetOptions] = None,
     demo_key: Optional[str] = None,
     reference_frame_index: Optional[int] = None,
@@ -709,6 +789,11 @@ def collect_online_intervention_report(
             reset_options=resolved_reset_options,
             frame_callback=baseline_frame_callback,
         )
+        attempt_masks = (
+            list(masked_attempt_masks)
+            if masked_attempt_masks is not None
+            else [mask for _ in range(max(0, int(masked_attempts)))]
+        )
         masked_runs = [
             _rollout_attempt(
                 env=env,
@@ -717,14 +802,19 @@ def collect_online_intervention_report(
                 target_row=target_row,
                 target_col=target_col,
                 max_steps=max_steps,
-                mask=mask,
+                mask=attempt_mask,
                 attempt_index=attempt_idx + 1,
-                title=f"Mask Attempt {attempt_idx + 1}",
+                title=(
+                    f"Mask Attempt {attempt_idx + 1}: {attempt_mask.label}"
+                    if attempt_mask is not None
+                    else f"Mask Attempt {attempt_idx + 1}"
+                ),
                 reset_options=resolved_reset_options,
                 frame_callback=None,
             )
-            for attempt_idx in range(max(0, int(masked_attempts)))
+            for attempt_idx, attempt_mask in enumerate(attempt_masks)
         ]
+        primary_mask = attempt_masks[0] if attempt_masks else mask
         return OnlineInterventionReport(
             checkpoint=checkpoint,
             prompt_style=getattr(policy, "prompt_style", None),
@@ -737,8 +827,8 @@ def collect_online_intervention_report(
             intervention_kind=str(intervention_kind),
             reference_frame_index=None if reference_frame_index is None else int(reference_frame_index),
             reset_seed=None if resolved_reset_options.reset_seed is None else int(resolved_reset_options.reset_seed),
-            text_mask=mask if isinstance(mask, TextMaskCandidateSpec) else None,
-            patch_mask=mask if isinstance(mask, PatchMaskCandidateSpec) else None,
+            text_mask=primary_mask if isinstance(primary_mask, TextMaskCandidateSpec) else None,
+            patch_mask=primary_mask if isinstance(primary_mask, PatchMaskCandidateSpec) else None,
             baseline=baseline,
             masked_attempts=masked_runs,
         )

@@ -37,6 +37,10 @@ The report layout stays publication-style:
 
 - the unmasked trajectory is shown on the left
 - masked attempts are overlaid in one shared plot on the right
+- in dataset-driven mode the right panel uses the top `--attempts` ranked text
+  spans or patch candidates from the reference frame instead of rerunning one
+  identical mask repeatedly
+- each masked rollout is annotated inline with its selected mask label
 - the legend stays at the bottom
 - the exported PNG contains no extra GUI text
 
@@ -84,9 +88,9 @@ For each selected demo it:
 Mask selection is dataset-driven as well:
 
 - text masking is chosen from the reference HDF5 frame by running the offline
-  text-masking scan and taking the strongest candidate
+  text-masking scan and taking the top ranked candidates up to `--attempts`
 - patch masking is chosen from the reference HDF5 frame by running the offline
-  patch-occlusion scan and taking the strongest candidate
+  patch-occlusion scan and taking the top ranked candidates up to `--attempts`
 
 This keeps the online and offline intervention paths anchored to the same
 recorded demo content instead of relying on a hand-written target phrase only.
@@ -120,6 +124,11 @@ The renderer now overlays three marker types on both panels:
 - release markers where grasp changes `True -> False` or
   `move_committed=True`: release / commit
 
+On the masked panel the renderer also aligns the masked rollout starting points
+to the same `x,y` origin before drawing, so the overlaid paths compare how the
+interventions diverge after the shared start rather than showing reset-offset
+jitter.
+
 ## Manifest Contents
 
 The JSON manifest includes:
@@ -131,7 +140,8 @@ The JSON manifest includes:
 - `ever_moved_puck`
 - `ever_released`
 - the resolved per-report `reset_seed`
-- the resolved intervention kind and selected text or patch mask
+- the resolved intervention kind and the leading selected text or patch mask
+- the per-attempt mask attached to each masked rollout entry
 - the dataset demo key and reference frame index when dataset mode is used
 
 ## Video

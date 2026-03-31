@@ -21,12 +21,22 @@ BG_COLOR = (248, 249, 251, 255)
 PANEL_BG = (255, 255, 255, 255)
 PANEL_BORDER = (212, 218, 226, 255)
 LEGEND_TEXT = (32, 40, 52, 255)
+LABEL_BG = (255, 255, 255, 244)
 MARKER_OUTLINE = (28, 35, 44, 236)
 MARKER_FILL = (255, 255, 255, 244)
 MARKER_SOLID = (28, 35, 44, 236)
 RELEASE_MARKER_OUTLINE = (150, 55, 52, 236)
+START_MARKER_FILL = (255, 255, 255, 248)
+START_MARKER_OUTLINE = (28, 35, 44, 232)
 GRIPPER_CLOSE_THRESHOLD = 0.25
 MIN_TRAJECTORY_OPACITY = 0.3
+ATTEMPT_ACCENT_COLORS = (
+    (37, 99, 235, 255),
+    (219, 39, 119, 255),
+    (14, 165, 233, 255),
+    (234, 88, 12, 255),
+    (22, 163, 74, 255),
+)
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -54,25 +64,85 @@ def _project_xy(xyz: np.ndarray) -> np.ndarray:
     return points[:, :2].copy()
 
 
-def _all_report_points(report: OnlineInterventionReport) -> np.ndarray:
+def _apply_xy_offset(xyz: np.ndarray, *, xy_offset: np.ndarray | None = None) -> np.ndarray:
+    point = np.asarray(xyz, dtype=np.float32).reshape(-1)[:3].copy()
+    if xy_offset is not None:
+        point[:2] += np.asarray(xy_offset, dtype=np.float32).reshape(-1)[:2]
+    return point
+
+
+def _projection_extents_for_attempts(
+    attempts: Sequence[OnlineInterventionAttempt],
+    *,
+    attempt_xy_offsets: Sequence[np.ndarray] | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    if not attempts:
+        zero = np.zeros((2,), dtype=np.float32)
+        return zero, zero.copy()
+
+    if attempt_xy_offsets is None:
+        offsets = [np.zeros((2,), dtype=np.float32) for _ in attempts]
+    else:
+        offsets = [
+            np.asarray(item, dtype=np.float32).reshape(-1)[:2].copy()
+            for item in attempt_xy_offsets[: len(attempts)]
+        ]
+        if len(offsets) < len(attempts):
+            offsets.extend(np.zeros((2,), dtype=np.float32) for _ in range(len(attempts) - len(offsets)))
+
     points: list[np.ndarray] = []
-    for attempt in [report.baseline, *report.masked_attempts]:
-        if attempt.trajectory:
-            points.append(
-                np.asarray([np.asarray(step.eef_xyz, dtype=np.float32) for step in attempt.trajectory], dtype=np.float32)
+    for attempt, xy_offset in zip(attempts, offsets):
+        if not attempt.trajectory:
+            continue
+        points.append(
+            np.asarray(
+                [_apply_xy_offset(step.eef_xyz, xy_offset=xy_offset) for step in attempt.trajectory],
+                dtype=np.float32,
             )
+        )
     if not points:
-        return np.zeros((1, 3), dtype=np.float32)
-    return np.concatenate(points, axis=0)
+        zero = np.zeros((2,), dtype=np.float32)
+        return zero, zero.copy()
+
+    projected = _project_xy(np.concatenate(points, axis=0))
+    return projected.min(axis=0), projected.max(axis=0)
 
 
-def _projection_bounds(report: OnlineInterventionReport) -> tuple[np.ndarray, np.ndarray]:
-    projected = _project_xy(_all_report_points(report))
-    minimum = projected.min(axis=0)
-    maximum = projected.max(axis=0)
+def _projection_bounds_from_extents(
+    minimum: np.ndarray,
+    maximum: np.ndarray,
+    *,
+    span_override: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    minimum = np.asarray(minimum, dtype=np.float32).reshape(-1)[:2]
+    maximum = np.asarray(maximum, dtype=np.float32).reshape(-1)[:2]
+    center = 0.5 * (minimum + maximum)
     span = np.maximum(maximum - minimum, 1e-4)
+    if span_override is not None:
+        span = np.maximum(np.asarray(span_override, dtype=np.float32).reshape(-1)[:2], 1e-4)
     pad = span * 0.06
-    return minimum - pad, maximum + pad
+    half = 0.5 * span
+    return center - half - pad, center + half + pad
+
+
+def _masked_attempt_xy_offsets(report: OnlineInterventionReport) -> list[np.ndarray]:
+    if not report.masked_attempts:
+        return []
+    if report.baseline.trajectory:
+        anchor_xy = _project_xy(np.asarray(report.baseline.trajectory[0].eef_xyz, dtype=np.float32).reshape(1, 3))[0]
+    else:
+        anchor_xy = None
+
+    offsets: list[np.ndarray] = []
+    for attempt in report.masked_attempts:
+        if not attempt.trajectory:
+            offsets.append(np.zeros((2,), dtype=np.float32))
+            continue
+        start_xy = _project_xy(np.asarray(attempt.trajectory[0].eef_xyz, dtype=np.float32).reshape(1, 3))[0]
+        if anchor_xy is None:
+            anchor_xy = start_xy.copy()
+        offsets.append(np.asarray(anchor_xy - start_xy, dtype=np.float32))
+    return offsets
 
 
 def _height_bounds(report: OnlineInterventionReport) -> tuple[float, float]:
@@ -127,11 +197,14 @@ def _map_projected_point(
     projection_min: np.ndarray,
     projection_max: np.ndarray,
     padding: int = 28,
+    xy_offset: np.ndarray | None = None,
 ) -> tuple[int, int]:
     left, top, right, bottom = box
     usable_w = max(1, right - left - (2 * padding))
     usable_h = max(1, bottom - top - (2 * padding))
     projected = _project_xy(np.asarray(xyz, dtype=np.float32).reshape(1, 3))[0]
+    if xy_offset is not None:
+        projected = projected + np.asarray(xy_offset, dtype=np.float32).reshape(-1)[:2]
     span = np.maximum(projection_max - projection_min, 1e-4)
     scale = min(usable_w / span[0], usable_h / span[1])
     draw_w = span[0] * scale
@@ -225,6 +298,7 @@ def _draw_attempt_markers(
     z_max: float,
     alpha: int,
     alpha_mode: str,
+    xy_offset: np.ndarray | None = None,
 ) -> None:
     pickup_attempts, grasped_points, releases = _marker_events(attempt)
     step_count = max(1, len(attempt.trajectory))
@@ -258,6 +332,7 @@ def _draw_attempt_markers(
                 box=plot_box,
                 projection_min=projection_min,
                 projection_max=projection_max,
+                xy_offset=xy_offset,
             ),
             radius=8,
             outline=attempt_outline,
@@ -287,6 +362,7 @@ def _draw_attempt_markers(
                 box=plot_box,
                 projection_min=projection_min,
                 projection_max=projection_max,
+                xy_offset=xy_offset,
             ),
             radius=6,
             outline=solid_fill,
@@ -322,6 +398,7 @@ def _draw_attempt_markers(
                 box=plot_box,
                 projection_min=projection_min,
                 projection_max=projection_max,
+                xy_offset=xy_offset,
             ),
             radius=9,
             outline=release_outline,
@@ -342,6 +419,7 @@ def _draw_attempt_trajectory(
     alpha: int,
     width: int,
     alpha_mode: str,
+    xy_offset: np.ndarray | None = None,
 ) -> None:
     if len(attempt.trajectory) < 2:
         return
@@ -352,12 +430,14 @@ def _draw_attempt_trajectory(
             box=plot_box,
             projection_min=projection_min,
             projection_max=projection_max,
+            xy_offset=xy_offset,
         )
         next_point = _map_projected_point(
             step.eef_xyz,
             box=plot_box,
             projection_min=projection_min,
             projection_max=projection_max,
+            xy_offset=xy_offset,
         )
         segment_z = 0.5 * (
             float(np.asarray(prev_step.eef_xyz, dtype=np.float32)[2]) + float(np.asarray(step.eef_xyz, dtype=np.float32)[2])
@@ -374,6 +454,134 @@ def _draw_attempt_trajectory(
         draw.line([prev_point, next_point], fill=_line_color(step.phase, alpha=segment_alpha), width=width)
 
 
+def _attempt_accent_color(attempt_index: int) -> tuple[int, int, int, int]:
+    return ATTEMPT_ACCENT_COLORS[max(0, int(attempt_index) - 1) % len(ATTEMPT_ACCENT_COLORS)]
+
+
+def _fit_label_text(
+    draw: ImageDraw.ImageDraw,
+    text: str,
+    *,
+    font: ImageFont.ImageFont,
+    max_width: int,
+) -> str:
+    if _text_size(draw, text, font=font)[0] <= int(max_width):
+        return text
+    stripped = text.strip()
+    while len(stripped) > 4:
+        stripped = stripped[:-1].rstrip()
+        candidate = f"{stripped}..."
+        if _text_size(draw, candidate, font=font)[0] <= int(max_width):
+            return candidate
+    return "..."
+
+
+def _attempt_label_text(attempt: OnlineInterventionAttempt) -> str:
+    mask_label = attempt.title if attempt.mask is None else str(attempt.mask.label)
+    return f"{int(attempt.attempt_index)}. {mask_label}"
+
+
+def _draw_attempt_labels(
+    draw: ImageDraw.ImageDraw,
+    *,
+    attempts: Sequence[OnlineInterventionAttempt],
+    plot_box: tuple[int, int, int, int],
+    projection_min: np.ndarray,
+    projection_max: np.ndarray,
+    attempt_xy_offsets: Sequence[np.ndarray],
+    label_font: ImageFont.ImageFont,
+) -> None:
+    entries: list[dict[str, object]] = []
+    for attempt, xy_offset in zip(attempts, attempt_xy_offsets):
+        if not attempt.trajectory:
+            continue
+        endpoint = _map_projected_point(
+            attempt.trajectory[-1].eef_xyz,
+            box=plot_box,
+            projection_min=projection_min,
+            projection_max=projection_max,
+            xy_offset=xy_offset,
+        )
+        entries.append(
+            {
+                "attempt": attempt,
+                "endpoint": endpoint,
+                "accent": _attempt_accent_color(attempt.attempt_index),
+                "label": _attempt_label_text(attempt),
+            }
+        )
+    if not entries:
+        return
+
+    sorted_entries = sorted(entries, key=lambda item: int(item["endpoint"][1]))
+    slot_top = plot_box[1] + 28
+    slot_bottom = plot_box[3] - 28
+    max_box_width = max(180, int((plot_box[2] - plot_box[0]) * 0.42))
+    for slot_idx, entry in enumerate(sorted_entries):
+        if len(sorted_entries) == 1:
+            slot_y = int(round((slot_top + slot_bottom) * 0.5))
+        else:
+            slot_y = int(
+                round(
+                    slot_top + (slot_idx * (slot_bottom - slot_top) / float(max(1, len(sorted_entries) - 1)))
+                )
+            )
+        endpoint = tuple(int(value) for value in entry["endpoint"])
+        accent = tuple(int(value) for value in entry["accent"])
+        label = _fit_label_text(draw, str(entry["label"]), font=label_font, max_width=max_box_width - 24)
+        text_w, text_h = _text_size(draw, label, font=label_font)
+        box_w = min(max_box_width, text_w + 24)
+        box_h = text_h + 16
+        box_right = plot_box[2] - 18
+        box_left = max(plot_box[0] + 20, box_right - box_w)
+        box_top = int(np.clip(slot_y - (box_h * 0.5), plot_box[1] + 12, plot_box[3] - box_h - 12))
+        box_bottom = box_top + box_h
+        connector_mid_x = int(round((endpoint[0] + box_left - 12) * 0.5))
+        connector_end = (box_left - 10, int(round((box_top + box_bottom) * 0.5)))
+
+        draw.line([endpoint, (connector_mid_x, endpoint[1]), connector_end], fill=accent, width=3)
+        draw.ellipse(
+            (
+                endpoint[0] - 7,
+                endpoint[1] - 7,
+                endpoint[0] + 7,
+                endpoint[1] + 7,
+            ),
+            fill=accent,
+            outline=(255, 255, 255, 255),
+            width=2,
+        )
+        draw.rounded_rectangle(
+            (box_left, box_top, box_right, box_bottom),
+            radius=14,
+            fill=LABEL_BG,
+            outline=accent,
+            width=2,
+        )
+        draw.text((box_left + 12, box_top + 8), label, fill=LEGEND_TEXT, font=label_font)
+
+
+def _draw_aligned_start_marker(
+    draw: ImageDraw.ImageDraw,
+    *,
+    point: tuple[int, int],
+) -> None:
+    radius = 9
+    draw.ellipse(
+        (
+            point[0] - radius,
+            point[1] - radius,
+            point[0] + radius,
+            point[1] + radius,
+        ),
+        fill=START_MARKER_FILL,
+        outline=START_MARKER_OUTLINE,
+        width=2,
+    )
+    draw.line([(point[0] - 6, point[1]), (point[0] + 6, point[1])], fill=START_MARKER_OUTLINE, width=2)
+    draw.line([(point[0], point[1] - 6), (point[0], point[1] + 6)], fill=START_MARKER_OUTLINE, width=2)
+
+
 def _draw_plot_panel(
     image: Image.Image,
     *,
@@ -386,16 +594,29 @@ def _draw_plot_panel(
     alpha: int,
     width: int,
     alpha_mode: str,
+    attempt_xy_offsets: Sequence[np.ndarray] | None = None,
+    show_attempt_labels: bool = False,
+    show_aligned_start_marker: bool = False,
 ) -> Image.Image:
-    draw = ImageDraw.Draw(image, "RGBA")
-    draw.rounded_rectangle(panel_box, radius=24, fill=PANEL_BG, outline=PANEL_BORDER, width=2)
+    base_draw = ImageDraw.Draw(image, "RGBA")
+    base_draw.rounded_rectangle(panel_box, radius=24, fill=PANEL_BG, outline=PANEL_BORDER, width=2)
     plot_box = (
         panel_box[0] + 8,
         panel_box[1] + 8,
         panel_box[2] - 8,
         panel_box[3] - 8,
     )
-    for attempt in attempts:
+    if attempt_xy_offsets is None:
+        xy_offsets = [np.zeros((2,), dtype=np.float32) for _ in attempts]
+    else:
+        xy_offsets = [
+            np.asarray(item, dtype=np.float32).reshape(-1)[:2].copy()
+            for item in attempt_xy_offsets[: len(attempts)]
+        ]
+        if len(xy_offsets) < len(attempts):
+            xy_offsets.extend(np.zeros((2,), dtype=np.float32) for _ in range(len(attempts) - len(xy_offsets)))
+
+    for attempt, xy_offset in zip(attempts, xy_offsets):
         attempt_layer = Image.new("RGBA", image.size, color=(0, 0, 0, 0))
         attempt_draw = ImageDraw.Draw(attempt_layer, "RGBA")
         _draw_attempt_trajectory(
@@ -409,6 +630,7 @@ def _draw_plot_panel(
             alpha=alpha,
             width=width,
             alpha_mode=alpha_mode,
+            xy_offset=xy_offset,
         )
         _draw_attempt_markers(
             attempt_draw,
@@ -420,8 +642,35 @@ def _draw_plot_panel(
             z_max=z_max,
             alpha=min(255, alpha + 36),
             alpha_mode=alpha_mode,
+            xy_offset=xy_offset,
         )
         image = Image.alpha_composite(image, attempt_layer)
+    draw = ImageDraw.Draw(image, "RGBA")
+    if show_aligned_start_marker:
+        for attempt, xy_offset in zip(attempts, xy_offsets):
+            if not attempt.trajectory:
+                continue
+            _draw_aligned_start_marker(
+                draw,
+                point=_map_projected_point(
+                    attempt.trajectory[0].eef_xyz,
+                    box=plot_box,
+                    projection_min=projection_min,
+                    projection_max=projection_max,
+                    xy_offset=xy_offset,
+                ),
+            )
+            break
+    if show_attempt_labels:
+        _draw_attempt_labels(
+            draw,
+            attempts=attempts,
+            plot_box=plot_box,
+            projection_min=projection_min,
+            projection_max=projection_max,
+            attempt_xy_offsets=xy_offsets,
+            label_font=_load_font(24),
+        )
     return image
 
 
@@ -502,32 +751,56 @@ def export_online_intervention_report_png(
     )
 
     image = Image.new("RGBA", (canvas_w, canvas_h), color=BG_COLOR)
-    projection_min, projection_max = _projection_bounds(report)
     z_min, z_max = _height_bounds(report)
+    baseline_offsets = [np.zeros((2,), dtype=np.float32)]
+    masked_offsets = _masked_attempt_xy_offsets(report)
+    left_raw_min, left_raw_max = _projection_extents_for_attempts([report.baseline], attempt_xy_offsets=baseline_offsets)
+    if report.masked_attempts:
+        right_raw_min, right_raw_max = _projection_extents_for_attempts(
+            report.masked_attempts,
+            attempt_xy_offsets=masked_offsets,
+        )
+    else:
+        right_raw_min, right_raw_max = left_raw_min.copy(), left_raw_max.copy()
+    shared_span = np.maximum(left_raw_max - left_raw_min, right_raw_max - right_raw_min)
+    left_projection_min, left_projection_max = _projection_bounds_from_extents(
+        left_raw_min,
+        left_raw_max,
+        span_override=shared_span,
+    )
+    right_projection_min, right_projection_max = _projection_bounds_from_extents(
+        right_raw_min,
+        right_raw_max,
+        span_override=shared_span,
+    )
 
     image = _draw_plot_panel(
         image,
         panel_box=left_panel,
         attempts=[report.baseline],
-        projection_min=projection_min,
-        projection_max=projection_max,
+        projection_min=left_projection_min,
+        projection_max=left_projection_max,
         z_min=z_min,
         z_max=z_max,
         alpha=240,
         width=7,
         alpha_mode=alpha_mode,
+        attempt_xy_offsets=baseline_offsets,
     )
     image = _draw_plot_panel(
         image,
         panel_box=right_panel,
         attempts=report.masked_attempts,
-        projection_min=projection_min,
-        projection_max=projection_max,
+        projection_min=right_projection_min,
+        projection_max=right_projection_max,
         z_min=z_min,
         z_max=z_max,
         alpha=112,
         width=6,
         alpha_mode=alpha_mode,
+        attempt_xy_offsets=masked_offsets,
+        show_attempt_labels=bool(report.masked_attempts),
+        show_aligned_start_marker=bool(report.masked_attempts),
     )
 
     draw = ImageDraw.Draw(image, "RGBA")

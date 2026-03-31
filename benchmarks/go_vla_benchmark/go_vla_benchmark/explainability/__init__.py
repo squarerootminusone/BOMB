@@ -71,6 +71,7 @@ from .online_interventions import (
     online_intervention_report_manifest,
     online_text_mask_report_manifest,
     select_online_intervention_mask_from_reference,
+    select_online_intervention_masks_from_reference,
 )
 from .reporting_causal import export_causal_localization_report
 from .reporting_interventions import export_intervention_report
@@ -162,6 +163,7 @@ __all__ = [
     "save_intervention_trace_file",
     "save_trace_file",
     "select_online_intervention_mask_from_reference",
+    "select_online_intervention_masks_from_reference",
     "select_ranked_traces",
     "select_top_k_traces_preserving_order",
     "trace_manifest",

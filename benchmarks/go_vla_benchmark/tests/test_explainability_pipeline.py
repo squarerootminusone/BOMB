@@ -47,6 +47,7 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     save_intervention_trace_file,
     save_trace_file,
     select_online_intervention_mask_from_reference,
+    select_online_intervention_masks_from_reference,
     select_top_k_traces_preserving_order,
     TextMaskCandidateSpec,
     trace_manifest,
@@ -59,6 +60,7 @@ from go_vla_benchmark.explainability.reporting_causal import (  # noqa: E402
 )
 from go_vla_benchmark.explainability.reporting_online_interventions import (  # noqa: E402
     _height_alpha,
+    _masked_attempt_xy_offsets,
     _time_alpha,
 )
 
@@ -126,6 +128,17 @@ class _FakeInterventionAdapter(_FakeModelAdapter):
                     target_token_probs=np.asarray([0.7, 0.6, 0.4], dtype=np.float32),
                     target_token_bin_indices=np.asarray([201, 202, 203], dtype=np.int64),
                     target_token_bin_centers=np.asarray([-0.5, 0.1, 0.9], dtype=np.float32),
+                ),
+                InterventionCandidateEffect(
+                    index=2,
+                    label="patch (1, 0)",
+                    score=0.22,
+                    pred_action_xyzg=np.asarray([0.45, 0.1, -0.2, -1.0], dtype=np.float32),
+                    raw_pred_action=np.asarray([0.45, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
+                    target_token_ids=np.asarray([24, 25, 26], dtype=np.int64),
+                    target_token_probs=np.asarray([0.65, 0.55, 0.35], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([204, 205, 206], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.4, 0.15, 0.85], dtype=np.float32),
                 )
             ],
         )
@@ -141,6 +154,8 @@ class _FakeInterventionAdapter(_FakeModelAdapter):
         task_text = instruction.lower()
         stone_start = task_text.find("stone")
         stone_end = stone_start + len("stone") if stone_start >= 0 else -1
+        board_start = task_text.find("go board")
+        board_end = board_start + len("go board") if board_start >= 0 else -1
         return InterventionScan(
             effect_map=np.asarray([0.25, 0.15], dtype=np.float32),
             top_candidates=[
@@ -156,6 +171,19 @@ class _FakeInterventionAdapter(_FakeModelAdapter):
                     target_token_bin_centers=np.asarray([-0.3, 0.2, 0.8], dtype=np.float32),
                     task_char_start=None if stone_start < 0 else stone_start,
                     task_char_end=None if stone_start < 0 else stone_end,
+                ),
+                InterventionCandidateEffect(
+                    index=1,
+                    label="go board",
+                    score=0.15,
+                    pred_action_xyzg=np.asarray([0.35, 0.1, -0.2, -1.0], dtype=np.float32),
+                    raw_pred_action=np.asarray([0.35, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
+                    target_token_ids=np.asarray([34, 35, 36], dtype=np.int64),
+                    target_token_probs=np.asarray([0.55, 0.45, 0.35], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([304, 305, 306], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.2, 0.25, 0.7], dtype=np.float32),
+                    task_char_start=None if board_start < 0 else board_start,
+                    task_char_end=None if board_start < 0 else board_end,
                 )
             ],
         )
@@ -321,13 +349,20 @@ class _FakeOnlinePolicy(_FakeInterventionAdapter):
         target_row: int | None = None,
         target_col: int | None = None,
     ) -> TextMaskCandidateSpec:
-        del instruction, index, target_row, target_col
+        del instruction, target_row, target_col
+        resolved_index = 0 if index is None else int(index)
+        default_labels = {
+            0: "row 3, column 4",
+            1: "go board",
+            2: "stone",
+        }
+        resolved_label = default_labels.get(resolved_index, f"mask {resolved_index}") if label is None else label
         return TextMaskCandidateSpec(
-            index=0,
-            label="row 3, column 4" if label is None else label,
-            prompt_token_positions=np.asarray([3, 4], dtype=np.int64),
-            task_char_start=32,
-            task_char_end=47,
+            index=resolved_index,
+            label=resolved_label,
+            prompt_token_positions=np.asarray([3 + resolved_index, 4 + resolved_index], dtype=np.int64),
+            task_char_start=32 + resolved_index,
+            task_char_end=32 + resolved_index + len(resolved_label),
         )
 
 
@@ -1374,6 +1409,127 @@ class ExplainabilityPipelineTest(unittest.TestCase):
         np.testing.assert_allclose(baseline_start, np.asarray(report.masked_attempts[0].trajectory[0].eef_xyz, dtype=np.float32))
         np.testing.assert_allclose(baseline_start, np.asarray(report.masked_attempts[1].trajectory[0].eef_xyz, dtype=np.float32))
 
+    def test_online_report_renderer_aligns_masked_starts_and_draws_attempt_labels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            scenarios = [
+                {
+                    "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                    "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    "initial": {
+                        "eef_xyz": np.asarray([-0.18, -0.10, 0.95], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                    },
+                    "steps": [
+                        {
+                            "eef_xyz": np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                            "stone_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                            "stone_grasped": False,
+                            "move_committed": True,
+                            "done": True,
+                        },
+                    ],
+                },
+                {
+                    "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                    "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    "initial": {
+                        "eef_xyz": np.asarray([-0.10, -0.03, 0.95], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                    },
+                    "steps": [
+                        {
+                            "eef_xyz": np.asarray([0.01, -0.12, 0.88], dtype=np.float32),
+                            "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                            "stone_grasped": False,
+                            "move_committed": False,
+                            "done": False,
+                        },
+                        {
+                            "eef_xyz": np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                            "stone_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                            "stone_grasped": False,
+                            "move_committed": True,
+                            "done": True,
+                        },
+                    ],
+                },
+                {
+                    "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                    "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    "initial": {
+                        "eef_xyz": np.asarray([-0.05, -0.16, 0.95], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                    },
+                    "steps": [
+                        {
+                            "eef_xyz": np.asarray([0.02, -0.12, 0.84], dtype=np.float32),
+                            "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                            "stone_grasped": False,
+                            "move_committed": False,
+                            "done": False,
+                        },
+                        {
+                            "eef_xyz": np.asarray([0.16, 0.08, 0.84], dtype=np.float32),
+                            "stone_xyz": np.asarray([0.16, 0.08, 0.82], dtype=np.float32),
+                            "stone_grasped": False,
+                            "move_committed": True,
+                            "done": True,
+                        },
+                    ],
+                },
+            ]
+            report = collect_online_intervention_report(
+                policy=_FakeOnlinePolicy(),
+                env_factory=lambda: _FakeOnlineEnv(scenarios=scenarios),
+                instruction="Place a black stone on the Go board at row 3, column 4.",
+                target_row=3,
+                target_col=4,
+                max_steps=2,
+                intervention_kind="text",
+                masked_attempt_masks=[
+                    TextMaskCandidateSpec(
+                        index=0,
+                        label="row 3, column 4",
+                        prompt_token_positions=np.asarray([3, 4], dtype=np.int64),
+                        task_char_start=32,
+                        task_char_end=47,
+                    ),
+                    TextMaskCandidateSpec(
+                        index=1,
+                        label="go board",
+                        prompt_token_positions=np.asarray([4, 5], dtype=np.int64),
+                        task_char_start=24,
+                        task_char_end=32,
+                    ),
+                ],
+            )
+
+            self.assertEqual(report.text_mask.label, "row 3, column 4")
+            self.assertEqual(report.masked_attempts[0].mask.label, "row 3, column 4")
+            self.assertEqual(report.masked_attempts[1].mask.label, "go board")
+
+            offsets = _masked_attempt_xy_offsets(report)
+            baseline_start_xy = np.asarray(report.baseline.trajectory[0].eef_xyz, dtype=np.float32)[:2]
+            aligned_mask_start_xy = [
+                np.asarray(attempt.trajectory[0].eef_xyz, dtype=np.float32)[:2] + np.asarray(offset, dtype=np.float32)
+                for attempt, offset in zip(report.masked_attempts, offsets)
+            ]
+            for aligned_start in aligned_mask_start_xy:
+                np.testing.assert_allclose(aligned_start, baseline_start_xy)
+
+            png_path = tmp_path / "online_task_report_labeled.png"
+            export_online_intervention_report_png(report=report, output_path=png_path, trajectory_alpha_mode="time")
+            image = np.asarray(Image.open(png_path), dtype=np.uint8)
+            self.assertTrue(np.any(np.all(image == np.asarray([37, 99, 235], dtype=np.uint8), axis=-1)))
+            self.assertTrue(np.any(np.all(image == np.asarray([219, 39, 119], dtype=np.uint8), axis=-1)))
+
     def test_infer_online_task_phase_is_monotonic(self) -> None:
         source_xyz = np.asarray([0.0, 0.0, 0.8], dtype=np.float32)
         target_xyz = np.asarray([0.2, 0.2, 0.82], dtype=np.float32)
@@ -1442,6 +1598,31 @@ class ExplainabilityPipelineTest(unittest.TestCase):
         self.assertEqual(mask.patch_row, 0)
         self.assertEqual(mask.patch_col, 0)
         self.assertEqual(mask.grid_side, 2)
+
+    def test_select_online_masks_from_reference_returns_ranked_candidates(self) -> None:
+        policy = _FakeOnlinePolicy()
+        reference_image = np.full((4, 4, 3), fill_value=80, dtype=np.uint8)
+        instruction = "Place a black stone on the Go board at row 3, column 4."
+
+        patch_masks = select_online_intervention_masks_from_reference(
+            policy=policy,
+            reference_image=reference_image,
+            instruction=instruction,
+            intervention_kind="patch",
+            max_masks=2,
+        )
+        self.assertEqual([mask.index for mask in patch_masks], [0, 2])
+        self.assertEqual([mask.label for mask in patch_masks], ["patch (0, 0)", "patch (1, 0)"])
+
+        text_masks = select_online_intervention_masks_from_reference(
+            policy=policy,
+            reference_image=reference_image,
+            instruction=instruction,
+            intervention_kind="text",
+            max_masks=2,
+        )
+        self.assertEqual([mask.index for mask in text_masks], [0, 1])
+        self.assertEqual([mask.label for mask in text_masks], ["row 3, column 4", "go board"])
 
     def test_collect_online_patch_report_uses_patch_mask_and_opening_history(self) -> None:
         scenarios = [
