@@ -65,6 +65,12 @@ from go_vla_benchmark.explainability.reporting_online_interventions import (  # 
 )
 
 
+def _contains_rgb(image: np.ndarray, rgb: np.ndarray, *, tolerance: int = 12) -> bool:
+    image_rgb = np.asarray(image, dtype=np.int16)[..., :3]
+    target_rgb = np.asarray(rgb, dtype=np.int16).reshape(1, 1, 3)
+    return bool(np.any(np.all(np.abs(image_rgb - target_rgb) <= int(tolerance), axis=-1)))
+
+
 class _FakeModelAdapter:
     def __init__(self) -> None:
         self._call_idx = 0
@@ -1172,13 +1178,13 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             self.assertGreater(int(image.shape[0]), 400)
             self.assertGreater(int(image.shape[1]), 900)
             np.testing.assert_array_equal(image, time_image)
-            self.assertTrue(np.any(np.all(image == np.asarray([45, 91, 188], dtype=np.uint8), axis=-1)))
-            self.assertTrue(np.any(np.all(image == np.asarray([196, 67, 64], dtype=np.uint8), axis=-1)))
-            self.assertTrue(np.any(np.all(image == np.asarray([28, 35, 44], dtype=np.uint8), axis=-1)))
-            self.assertTrue(np.any(np.all(image == np.asarray([150, 55, 52], dtype=np.uint8), axis=-1)))
-            bottom_strip = image[-180:, :, :]
-            self.assertTrue(np.any(np.all(bottom_strip == np.asarray([45, 91, 188], dtype=np.uint8), axis=-1)))
-            self.assertTrue(np.any(np.all(bottom_strip == np.asarray([196, 67, 64], dtype=np.uint8), axis=-1)))
+            self.assertTrue(_contains_rgb(image, np.asarray([45, 91, 188], dtype=np.uint8)))
+            self.assertTrue(_contains_rgb(image, np.asarray([196, 67, 64], dtype=np.uint8)))
+            self.assertTrue(_contains_rgb(image, np.asarray([28, 35, 44], dtype=np.uint8)))
+            self.assertTrue(_contains_rgb(image, np.asarray([150, 55, 52], dtype=np.uint8)))
+            legend_band = image[(image.shape[0] * 2) // 3 :, :, :]
+            self.assertTrue(_contains_rgb(legend_band, np.asarray([45, 91, 188], dtype=np.uint8)))
+            self.assertTrue(_contains_rgb(legend_band, np.asarray([196, 67, 64], dtype=np.uint8)))
             self.assertEqual(_time_alpha(0, step_count=5, alpha=240), 168)
             self.assertEqual(_time_alpha(4, step_count=5, alpha=240), 240)
             self.assertEqual(_height_alpha(0.95, z_min=0.80, z_max=0.95, alpha=240), 168)
@@ -1533,19 +1539,13 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             png_path = tmp_path / "online_task_report_labeled.png"
             export_online_intervention_report_png(report=report, output_path=png_path, trajectory_alpha_mode="time")
             image = np.asarray(Image.open(png_path), dtype=np.uint8)
-            self.assertTrue(np.any(np.all(image == np.asarray([37, 99, 235], dtype=np.uint8), axis=-1)))
-            self.assertTrue(np.any(np.all(image == np.asarray([219, 39, 119], dtype=np.uint8), axis=-1)))
+            self.assertTrue(_contains_rgb(image, np.asarray([37, 99, 235], dtype=np.uint8)))
+            self.assertTrue(_contains_rgb(image, np.asarray([219, 39, 119], dtype=np.uint8)))
             right_plot = image[: image.shape[0] - 260, image.shape[1] // 2 :, :]
-            self.assertTrue(
-                np.any(
-                    (right_plot[:, :, 0] > 220)
-                    & (right_plot[:, :, 1] < 210)
-                    & (right_plot[:, :, 2] > 150)
-                )
-            )
-            bottom_strip = image[-180:, :, :]
-            self.assertTrue(np.any(np.all(bottom_strip == np.asarray([37, 99, 235], dtype=np.uint8), axis=-1)))
-            self.assertTrue(np.any(np.all(bottom_strip == np.asarray([219, 39, 119], dtype=np.uint8), axis=-1)))
+            self.assertTrue(_contains_rgb(right_plot, np.asarray([219, 39, 119], dtype=np.uint8)))
+            legend_band = image[(image.shape[0] * 2) // 3 :, :, :]
+            self.assertTrue(_contains_rgb(legend_band, np.asarray([37, 99, 235], dtype=np.uint8)))
+            self.assertTrue(_contains_rgb(legend_band, np.asarray([219, 39, 119], dtype=np.uint8)))
 
     def test_infer_online_task_phase_is_monotonic(self) -> None:
         source_xyz = np.asarray([0.0, 0.0, 0.8], dtype=np.float32)

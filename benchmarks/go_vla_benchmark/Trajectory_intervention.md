@@ -33,17 +33,17 @@ The online report uses the real simulator and online inference. It supports:
 - text masking
 - patch masking
 
-The report layout stays publication-style:
+The report layout stays paper-style:
 
+- the exported PNG is a clean Matplotlib-style figure rather than a UI card
 - the unmasked trajectory is shown on the left
 - masked attempts are overlaid in one shared plot on the right
 - in dataset-driven mode the right panel uses the top `--attempts` ranked text
   spans or patch candidates from the reference frame instead of rerunning one
   identical mask repeatedly
-- each masked rollout is annotated inline with its selected mask label
-- the bottom legend also lists the unmasked rollout plus every masked attempt,
-  with a color swatch next to each attempt label and the text span / patch
-  chosen for that rollout
+- each masked rollout stays identifiable through its legend entry and color
+- the bottom legends group task phases, event markers, and the unmasked plus
+  masked attempt labels in a paper-friendly layout
 - the exported PNG contains no extra GUI text
 
 The plotted trajectory is the arm / end-effector path shown in a true top-down
