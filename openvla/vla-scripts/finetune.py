@@ -281,6 +281,46 @@ def finetune(cfg: DictConfig) -> None:
     if cfg.data.image_aug:
         exp_id += "--image_aug"
 
+    # Resolve optional checkpoint init paths
+    resume_path = Path(cfg.resume_from).expanduser() if cfg.get("resume_from") else None
+    warm_start_path = Path(cfg.warm_start_from).expanduser() if cfg.get("warm_start_from") else None
+    if resume_path is not None and warm_start_path is not None:
+        raise ValueError(
+            "Set only one of `resume_from` or `warm_start_from`. "
+            "`resume_from` restores optimizer state; `warm_start_from` starts a fresh run from saved weights."
+        )
+    if resume_path is not None and not resume_path.exists():
+        raise FileNotFoundError(f"Resume checkpoint directory does not exist: {resume_path}")
+    if warm_start_path is not None and not warm_start_path.exists():
+        raise FileNotFoundError(f"Warm-start checkpoint directory does not exist: {warm_start_path}")
+
+    model_path = cfg.vla_path
+    processor_path = cfg.vla_path
+    adapter_init_path = None
+    if resume_path is not None:
+        if cfg.lora.enabled:
+            adapter_init_path = resume_path / "adapter"
+            if not adapter_init_path.exists():
+                raise FileNotFoundError(
+                    f"Expected LoRA adapter directory at `{adapter_init_path}` for `resume_from`."
+                )
+        else:
+            model_path = str(resume_path / "model")
+            processor_path = model_path
+    elif warm_start_path is not None:
+        if cfg.lora.enabled:
+            adapter_init_path = warm_start_path
+            adapter_weights_exist = any((warm_start_path / name).exists() for name in ("adapter_model.safetensors", "adapter_model.bin"))
+            if not (warm_start_path / "adapter_config.json").exists() or not adapter_weights_exist:
+                raise FileNotFoundError(
+                    f"`warm_start_from` must point to a saved LoRA adapter directory such as "
+                    f"`checkpoints/latest` or `checkpoints/best`: {warm_start_path}"
+                )
+        else:
+            model_path = str(warm_start_path)
+        if (warm_start_path / "preprocessor_config.json").exists():
+            processor_path = str(warm_start_path)
+
     # Quantization Config =>> only if LoRA fine-tuning
     quantization_config = None
     if cfg.lora.quantization:
@@ -296,9 +336,9 @@ def finetune(cfg: DictConfig) -> None:
     AutoModelForVision2Seq.register(OpenVLAConfig, OpenVLAForActionPrediction)
 
     # Load OpenVLA Processor and Model using HF AutoClasses
-    processor = AutoProcessor.from_pretrained(cfg.vla_path, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True)
     vla = AutoModelForVision2Seq.from_pretrained(
-        cfg.vla_path,
+        model_path,
         torch_dtype=torch.bfloat16,
         quantization_config=quantization_config,
         low_cpu_mem_usage=True,
@@ -318,14 +358,18 @@ def finetune(cfg: DictConfig) -> None:
 
     # [LoRA] Wrap Model w/ PEFT `LoraConfig` =>> by default we set `target_modules=all-linear`
     if cfg.lora.enabled:
-        lora_config = LoraConfig(
-            r=cfg.lora.rank,
-            lora_alpha=min(cfg.lora.rank, 16),
-            lora_dropout=cfg.lora.dropout,
-            target_modules="all-linear",
-            init_lora_weights="gaussian",
-        )
-        vla = get_peft_model(vla, lora_config)
+        if adapter_init_path is not None:
+            vla = PeftModel.from_pretrained(vla, str(adapter_init_path), is_trainable=True)
+            print(f"Loaded trainable LoRA weights from `{adapter_init_path}`")
+        else:
+            lora_config = LoraConfig(
+                r=cfg.lora.rank,
+                lora_alpha=min(cfg.lora.rank, 16),
+                lora_dropout=cfg.lora.dropout,
+                target_modules="all-linear",
+                init_lora_weights="gaussian",
+            )
+            vla = get_peft_model(vla, lora_config)
         vla.print_trainable_parameters()
 
     # Wrap VLA in PyTorch DDP Wrapper for Multi-GPU Training (skip for single-GPU)
@@ -342,14 +386,12 @@ def finetune(cfg: DictConfig) -> None:
 
     # Resume from checkpoint if specified
     resume_step = 0
-    if cfg.get("resume_from"):
-        resume_path = Path(cfg.resume_from)
+    best_val_loss = float("inf")
+    if resume_path is not None:
         ckpt = torch.load(resume_path / "training_state.pt", map_location=f"cuda:{device_id}")
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         resume_step = ckpt["gradient_step"]
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
-        if cfg.lora.enabled:
-            unwrapped_vla.load_adapter(str(resume_path / "adapter"), "default")
         print(f"Resumed from step {resume_step} (best_val_loss={best_val_loss:.4f})")
 
     # Create Action Tokenizer
@@ -423,7 +465,6 @@ def finetune(cfg: DictConfig) -> None:
     os.makedirs(resume_dir, exist_ok=True)
 
     # Best model tracking
-    best_val_loss = float("inf")
     best_checkpoint_dir = run_dir / "best"
     os.makedirs(best_checkpoint_dir, exist_ok=True)
 
@@ -447,8 +488,8 @@ def finetune(cfg: DictConfig) -> None:
     recent_action_accuracies = deque(maxlen=cfg.training.grad_accumulation_steps)
     recent_l1_losses = deque(maxlen=cfg.training.grad_accumulation_steps)
 
-    # Initial validation before training starts
-    if distributed_state.is_main_process:
+    # Initial validation before training starts for fresh runs and warm starts
+    if distributed_state.is_main_process and resume_step == 0:
         val_metrics = run_validation(vla, val_dataloader, action_tokenizer, unwrapped_vla, device_id)
         print(
             f"[Step 0] val_loss={val_metrics['val_loss']:.4f}  "

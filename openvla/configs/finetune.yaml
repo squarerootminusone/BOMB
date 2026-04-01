@@ -22,6 +22,7 @@ lora:
   quantization: false
 
 resume_from: null  # path to resume/ dir from a previous run
+warm_start_from: null  # optional path to checkpoints/latest or checkpoints/best for a fresh run
 
 wandb:
   project: openvla-masked
