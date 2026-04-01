@@ -193,7 +193,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
             homepage="https://github.com/anthropics/dsait4125",
         )
 
-    _NUM_VAL = 2  # number of held-out demos (taken from the end)
+    _NUM_VAL = 10  # number of held-out demos (taken from the end)
 
     def _split_generators(self, dl_manager):
         hdf5_path = os.environ.get("GO_VLA_HDF5_PATH", _DEFAULT_HDF5_PATH)

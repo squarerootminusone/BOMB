@@ -79,8 +79,6 @@ def run_validation(vla, val_dataloader, action_tokenizer, unwrapped_vla, device_
     vla.eval()
     val_losses, val_accs, val_l1s = [], [], []
     for i, batch in enumerate(val_dataloader):
-        if i >= max_batches:
-            break
         with torch.autocast("cuda", dtype=torch.bfloat16):
             output: CausalLMOutputWithPast = vla(
                 input_ids=batch["input_ids"].to(device_id),
