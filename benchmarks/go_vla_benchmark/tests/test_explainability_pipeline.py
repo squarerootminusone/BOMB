@@ -1176,6 +1176,12 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             self.assertTrue(np.any(np.all(image == np.asarray([196, 67, 64], dtype=np.uint8), axis=-1)))
             self.assertTrue(np.any(np.all(image == np.asarray([28, 35, 44], dtype=np.uint8), axis=-1)))
             self.assertTrue(np.any(np.all(image == np.asarray([150, 55, 52], dtype=np.uint8), axis=-1)))
+            bottom_strip = image[-180:, :, :]
+            self.assertTrue(np.any(np.all(bottom_strip == np.asarray([45, 91, 188], dtype=np.uint8), axis=-1)))
+            self.assertTrue(np.any(np.all(bottom_strip == np.asarray([196, 67, 64], dtype=np.uint8), axis=-1)))
+            self.assertEqual(_time_alpha(0, step_count=5, alpha=240), 168)
+            self.assertEqual(_time_alpha(4, step_count=5, alpha=240), 240)
+            self.assertEqual(_height_alpha(0.95, z_min=0.80, z_max=0.95, alpha=240), 168)
             self.assertLess(_time_alpha(0, step_count=5, alpha=240), _time_alpha(4, step_count=5, alpha=240))
             self.assertNotEqual(
                 _height_alpha(0.90, z_min=0.80, z_max=0.95, alpha=240),

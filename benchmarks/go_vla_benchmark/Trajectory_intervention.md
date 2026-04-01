@@ -41,18 +41,19 @@ The report layout stays publication-style:
   spans or patch candidates from the reference frame instead of rerunning one
   identical mask repeatedly
 - each masked rollout is annotated inline with its selected mask label
-- the bottom legend also lists every masked attempt and the text span / patch
+- the bottom legend also lists the unmasked rollout plus every masked attempt,
+  with a color swatch next to each attempt label and the text span / patch
   chosen for that rollout
 - the exported PNG contains no extra GUI text
 
 The plotted trajectory is the arm / end-effector path shown in a true top-down
-`x,y` view. By default opacity fades by time: the run starts at 30% opacity and
+`x,y` view. By default opacity fades by time: the run starts at 70% opacity and
 ramps up to full opacity at the end, so older trajectory segments are more
 transparent and newer segments are more opaque.
 
 If you prefer a height-based fade instead, pass
 `--height-trajectory-color-degradation`. In that mode the path is most opaque
-near table level and fades to 30% opacity at the highest point reached in the
+near table level and fades to 70% opacity at the highest point reached in the
 rollout.
 
 Each segment is colored by task phase:

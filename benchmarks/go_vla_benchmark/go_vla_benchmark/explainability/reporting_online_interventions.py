@@ -30,7 +30,7 @@ PHASE_MARKER_OUTLINE = (255, 255, 255, 244)
 START_MARKER_FILL = (255, 255, 255, 248)
 START_MARKER_OUTLINE = (28, 35, 44, 232)
 GRIPPER_CLOSE_THRESHOLD = 0.25
-MIN_TRAJECTORY_OPACITY = 0.3
+MIN_TRAJECTORY_OPACITY = 0.7
 ATTEMPT_ACCENT_COLORS = (
     (37, 99, 235, 255),
     (219, 39, 119, 255),
@@ -579,7 +579,59 @@ def _attempt_label_text(attempt: OnlineInterventionAttempt) -> str:
     return f"{int(attempt.attempt_index)}. {mask_label}"
 
 
-def _draw_mask_attempt_legend(
+def _attempt_legend_swatch_colors(
+    attempt: OnlineInterventionAttempt,
+) -> tuple[tuple[int, int, int, int], ...]:
+    if attempt.mask is None:
+        return tuple(
+            (int(color[0]), int(color[1]), int(color[2]), 255)
+            for color in (TASK_PHASE_COLORS[phase] for phase in TASK_PHASE_ORDER)
+        )
+    return (_attempt_accent_color(attempt.attempt_index),)
+
+
+def _draw_attempt_legend_swatch(
+    image: Image.Image,
+    *,
+    box: tuple[int, int, int, int],
+    colors: Sequence[Sequence[int]],
+) -> None:
+    left, top, right, bottom = box
+    swatch_w = max(1, int(right) - int(left))
+    swatch_h = max(1, int(bottom) - int(top))
+    radius = min(5, max(1, swatch_h // 2))
+    swatch = Image.new("RGBA", (swatch_w, swatch_h), color=(0, 0, 0, 0))
+    swatch_draw = ImageDraw.Draw(swatch, "RGBA")
+    resolved_colors = [
+        tuple(int(value) for value in color[:3]) + (255,)
+        for color in colors
+    ]
+    segment_edges = [int(round((idx * swatch_w) / max(1, len(resolved_colors)))) for idx in range(len(resolved_colors) + 1)]
+    for color, segment_left, segment_right in zip(resolved_colors, segment_edges[:-1], segment_edges[1:]):
+        swatch_draw.rectangle(
+            (
+                int(segment_left),
+                0,
+                max(int(segment_left), int(segment_right) - 1),
+                swatch_h - 1,
+            ),
+            fill=color,
+        )
+    swatch_mask = Image.new("L", (swatch_w, swatch_h), color=0)
+    mask_draw = ImageDraw.Draw(swatch_mask)
+    mask_draw.rounded_rectangle((0, 0, swatch_w - 1, swatch_h - 1), radius=radius, fill=255)
+    swatch.putalpha(swatch_mask)
+    swatch_draw.rounded_rectangle(
+        (0, 0, swatch_w - 1, swatch_h - 1),
+        radius=radius,
+        outline=(255, 255, 255, 255),
+        width=1,
+    )
+    image.alpha_composite(swatch, dest=(int(left), int(top)))
+
+
+def _draw_attempt_legend(
+    image: Image.Image,
     draw: ImageDraw.ImageDraw,
     *,
     attempts: Sequence[OnlineInterventionAttempt],
@@ -591,8 +643,8 @@ def _draw_mask_attempt_legend(
     header_font = _load_font(28)
     item_font = _load_font(24)
     left, top, right, bottom = box
-    draw.text((left, top), "Masked Attempts", fill=MASK_LEGEND_HEADER, font=header_font)
-    _header_w, header_h = _text_size(draw, "Masked Attempts", font=header_font)
+    draw.text((left, top), "Attempts", fill=MASK_LEGEND_HEADER, font=header_font)
+    _header_w, header_h = _text_size(draw, "Attempts", font=header_font)
 
     item_top = top + header_h + 16
     item_height = 34
@@ -602,7 +654,7 @@ def _draw_mask_attempt_legend(
     max_item_width = min(520, max(220, right - left))
 
     for attempt in attempts:
-        accent = _attempt_accent_color(attempt.attempt_index)
+        swatch_colors = _attempt_legend_swatch_colors(attempt)
         label = _fit_label_text(
             draw,
             _attempt_label_text(attempt),
@@ -619,12 +671,10 @@ def _draw_mask_attempt_legend(
             break
 
         swatch_y = y + int(round((item_height - 10) * 0.5))
-        draw.rounded_rectangle(
-            (x, swatch_y, x + 24, swatch_y + 10),
-            radius=5,
-            fill=accent,
-            outline=(255, 255, 255, 255),
-            width=1,
+        _draw_attempt_legend_swatch(
+            image,
+            box=(x, swatch_y, x + 24, swatch_y + 10),
+            colors=swatch_colors,
         )
         draw.text(
             (x + 34, y + int(round((item_height - label_h) * 0.5)) - 1),
@@ -1024,9 +1074,10 @@ def export_online_intervention_report_png(
         text_w, _ = _text_size(draw, label, font=marker_font)
         marker_x += text_w + 172
 
-    _draw_mask_attempt_legend(
+    _draw_attempt_legend(
+        image,
         draw,
-        attempts=report.masked_attempts,
+        attempts=[report.baseline, *report.masked_attempts],
         box=(
             margin_x + 20,
             legend_y + 112,

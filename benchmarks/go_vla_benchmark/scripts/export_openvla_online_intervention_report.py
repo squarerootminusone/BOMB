@@ -78,7 +78,7 @@ def parse_args() -> argparse.Namespace:
         action="store_const",
         const="time",
         default="time",
-        help="fade plotted trajectory opacity by time (default: start at 30% opacity, end at 100%)",
+        help="fade plotted trajectory opacity by time (default: start at 70% opacity, end at 100%)",
     )
     parser.add_argument(
         "--height-trajectory-color-degradation",
