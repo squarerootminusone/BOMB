@@ -1409,7 +1409,7 @@ class ExplainabilityPipelineTest(unittest.TestCase):
         np.testing.assert_allclose(baseline_start, np.asarray(report.masked_attempts[0].trajectory[0].eef_xyz, dtype=np.float32))
         np.testing.assert_allclose(baseline_start, np.asarray(report.masked_attempts[1].trajectory[0].eef_xyz, dtype=np.float32))
 
-    def test_online_report_renderer_aligns_masked_starts_and_draws_attempt_labels(self) -> None:
+    def test_online_report_renderer_aligns_masked_starts_and_colors_masked_trajectories(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
             scenarios = [
@@ -1529,6 +1529,14 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             image = np.asarray(Image.open(png_path), dtype=np.uint8)
             self.assertTrue(np.any(np.all(image == np.asarray([37, 99, 235], dtype=np.uint8), axis=-1)))
             self.assertTrue(np.any(np.all(image == np.asarray([219, 39, 119], dtype=np.uint8), axis=-1)))
+            right_plot = image[: image.shape[0] - 260, image.shape[1] // 2 :, :]
+            self.assertTrue(
+                np.any(
+                    (right_plot[:, :, 0] > 220)
+                    & (right_plot[:, :, 1] < 210)
+                    & (right_plot[:, :, 2] > 150)
+                )
+            )
             bottom_strip = image[-180:, :, :]
             self.assertTrue(np.any(np.all(bottom_strip == np.asarray([37, 99, 235], dtype=np.uint8), axis=-1)))
             self.assertTrue(np.any(np.all(bottom_strip == np.asarray([219, 39, 119], dtype=np.uint8), axis=-1)))

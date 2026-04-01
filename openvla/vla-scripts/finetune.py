@@ -152,7 +152,7 @@ def run_engine_rollout(vla, processor, device_id, output_dir, step, use_wandb, d
             action_scale=0.03,
             drive_physical_arm=True,
             render_carried_stone=True,
-            render_eef_overlay=False,
+            render_eef_overlay=True,
         )
 
     env = _engine_env

@@ -101,7 +101,7 @@ def main():
         seed=args.seed, include_image_obs=True,
         camera_height=256, camera_width=256,
         action_scale=0.03, drive_physical_arm=True,
-        render_carried_stone=True, render_eef_overlay=False,
+        render_carried_stone=True, render_eef_overlay=True,
     )
     env_interface = MG_GoJacoSingleMove(env=env)
 
@@ -146,7 +146,7 @@ def main():
                 seed=retry_seed, include_image_obs=True,
                 camera_height=256, camera_width=256,
                 action_scale=0.03, drive_physical_arm=True,
-                render_carried_stone=True, render_eef_overlay=False,
+                render_carried_stone=True, render_eef_overlay=True,
             )
             env_interface2 = MG_GoJacoSingleMove(env=env2)
             rng2 = np.random.RandomState(retry_seed)

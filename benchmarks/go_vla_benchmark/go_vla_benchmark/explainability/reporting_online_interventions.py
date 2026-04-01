@@ -26,6 +26,7 @@ MARKER_OUTLINE = (28, 35, 44, 236)
 MARKER_FILL = (255, 255, 255, 244)
 MARKER_SOLID = (28, 35, 44, 236)
 RELEASE_MARKER_OUTLINE = (150, 55, 52, 236)
+PHASE_MARKER_OUTLINE = (255, 255, 255, 244)
 START_MARKER_FILL = (255, 255, 255, 248)
 START_MARKER_OUTLINE = (28, 35, 44, 232)
 GRIPPER_CLOSE_THRESHOLD = 0.25
@@ -222,6 +223,11 @@ def _line_color(phase: str, alpha: int) -> tuple[int, int, int, int]:
     return (int(rgb[0]), int(rgb[1]), int(rgb[2]), int(alpha))
 
 
+def _accent_color(color: Sequence[int], alpha: int) -> tuple[int, int, int, int]:
+    rgb = tuple(int(value) for value in color[:3])
+    return (rgb[0], rgb[1], rgb[2], int(alpha))
+
+
 def _marker_events(
     attempt: OnlineInterventionAttempt,
 ) -> tuple[list[tuple[np.ndarray, int]], list[tuple[np.ndarray, int]], list[tuple[np.ndarray, int]]]:
@@ -286,6 +292,88 @@ def _draw_diamond_marker(
     ]
     draw.polygon(points, fill=fill)
     draw.line(points + [points[0]], fill=outline, width=width)
+
+
+def _draw_square_marker(
+    draw: ImageDraw.ImageDraw,
+    *,
+    center: tuple[int, int],
+    radius: int,
+    outline: tuple[int, int, int, int],
+    fill: tuple[int, int, int, int],
+    width: int,
+) -> None:
+    draw.rectangle(
+        (
+            center[0] - radius,
+            center[1] - radius,
+            center[0] + radius,
+            center[1] + radius,
+        ),
+        outline=outline,
+        fill=fill,
+        width=width,
+    )
+
+
+def _phase_change_markers(attempt: OnlineInterventionAttempt) -> list[tuple[np.ndarray, int, str]]:
+    markers: list[tuple[np.ndarray, int, str]] = []
+    previous_phase = None
+    for step_idx, step in enumerate(attempt.trajectory):
+        phase = str(step.phase)
+        if previous_phase != phase:
+            markers.append((np.asarray(step.eef_xyz, dtype=np.float32), int(step_idx), phase))
+            previous_phase = phase
+    return markers
+
+
+def _draw_phase_change_markers(
+    draw: ImageDraw.ImageDraw,
+    *,
+    attempt: OnlineInterventionAttempt,
+    plot_box: tuple[int, int, int, int],
+    projection_min: np.ndarray,
+    projection_max: np.ndarray,
+    z_min: float,
+    z_max: float,
+    alpha: int,
+    alpha_mode: str,
+    xy_offset: np.ndarray | None = None,
+) -> None:
+    step_count = max(1, len(attempt.trajectory))
+    minimum_alpha = min(255, max(96, int(round(float(alpha) * 0.75))))
+    for xyz, step_idx, phase in _phase_change_markers(attempt):
+        marker_alpha = max(
+            minimum_alpha,
+            _resolve_alpha(
+                alpha_mode=alpha_mode,
+                alpha=alpha,
+                z_value=float(np.asarray(xyz, dtype=np.float32)[2]),
+                z_min=z_min,
+                z_max=z_max,
+                step_index=int(step_idx),
+                step_count=step_count,
+            ),
+        )
+        _draw_square_marker(
+            draw,
+            center=_map_projected_point(
+                xyz,
+                box=plot_box,
+                projection_min=projection_min,
+                projection_max=projection_max,
+                xy_offset=xy_offset,
+            ),
+            radius=8,
+            outline=(
+                PHASE_MARKER_OUTLINE[0],
+                PHASE_MARKER_OUTLINE[1],
+                PHASE_MARKER_OUTLINE[2],
+                min(255, marker_alpha + 28),
+            ),
+            fill=_line_color(phase, alpha=marker_alpha),
+            width=2,
+        )
 
 
 def _draw_attempt_markers(
@@ -421,6 +509,7 @@ def _draw_attempt_trajectory(
     width: int,
     alpha_mode: str,
     xy_offset: np.ndarray | None = None,
+    trajectory_color: Sequence[int] | None = None,
 ) -> None:
     if len(attempt.trajectory) < 2:
         return
@@ -452,7 +541,15 @@ def _draw_attempt_trajectory(
             step_index=int(segment_idx),
             step_count=segment_count + 1,
         )
-        draw.line([prev_point, next_point], fill=_line_color(step.phase, alpha=segment_alpha), width=width)
+        draw.line(
+            [prev_point, next_point],
+            fill=(
+                _line_color(step.phase, alpha=segment_alpha)
+                if trajectory_color is None
+                else _accent_color(trajectory_color, alpha=segment_alpha)
+            ),
+            width=width,
+        )
 
 
 def _attempt_accent_color(attempt_index: int) -> tuple[int, int, int, int]:
@@ -654,6 +751,8 @@ def _draw_plot_panel(
     attempt_xy_offsets: Sequence[np.ndarray] | None = None,
     show_attempt_labels: bool = False,
     show_aligned_start_marker: bool = False,
+    trajectory_colors: Sequence[Sequence[int] | None] | None = None,
+    show_phase_change_markers: bool = False,
 ) -> Image.Image:
     base_draw = ImageDraw.Draw(image, "RGBA")
     base_draw.rounded_rectangle(panel_box, radius=24, fill=PANEL_BG, outline=PANEL_BORDER, width=2)
@@ -672,8 +771,14 @@ def _draw_plot_panel(
         ]
         if len(xy_offsets) < len(attempts):
             xy_offsets.extend(np.zeros((2,), dtype=np.float32) for _ in range(len(attempts) - len(xy_offsets)))
+    if trajectory_colors is None:
+        line_colors = [None for _ in attempts]
+    else:
+        line_colors = list(trajectory_colors[: len(attempts)])
+        if len(line_colors) < len(attempts):
+            line_colors.extend([None for _ in range(len(attempts) - len(line_colors))])
 
-    for attempt, xy_offset in zip(attempts, xy_offsets):
+    for attempt, xy_offset, line_color in zip(attempts, xy_offsets, line_colors):
         attempt_layer = Image.new("RGBA", image.size, color=(0, 0, 0, 0))
         attempt_draw = ImageDraw.Draw(attempt_layer, "RGBA")
         _draw_attempt_trajectory(
@@ -688,7 +793,21 @@ def _draw_plot_panel(
             width=width,
             alpha_mode=alpha_mode,
             xy_offset=xy_offset,
+            trajectory_color=line_color,
         )
+        if show_phase_change_markers:
+            _draw_phase_change_markers(
+                attempt_draw,
+                attempt=attempt,
+                plot_box=plot_box,
+                projection_min=projection_min,
+                projection_max=projection_max,
+                z_min=z_min,
+                z_max=z_max,
+                alpha=min(255, alpha + 48),
+                alpha_mode=alpha_mode,
+                xy_offset=xy_offset,
+            )
         _draw_attempt_markers(
             attempt_draw,
             attempt=attempt,
@@ -742,6 +861,16 @@ def _draw_legend_marker(
     kind: str,
     center: tuple[int, int],
 ) -> None:
+    if kind == "phase":
+        _draw_square_marker(
+            draw,
+            center=center,
+            radius=10,
+            outline=PHASE_MARKER_OUTLINE,
+            fill=MARKER_FILL,
+            width=2,
+        )
+        return
     if kind == "pickup_attempt":
         _draw_circle_marker(
             draw,
@@ -843,7 +972,9 @@ def export_online_intervention_report_png(
         width=7,
         alpha_mode=alpha_mode,
         attempt_xy_offsets=baseline_offsets,
+        show_phase_change_markers=True,
     )
+    masked_trajectory_colors = [_attempt_accent_color(attempt.attempt_index) for attempt in report.masked_attempts]
     image = _draw_plot_panel(
         image,
         panel_box=right_panel,
@@ -856,7 +987,8 @@ def export_online_intervention_report_png(
         width=6,
         alpha_mode=alpha_mode,
         attempt_xy_offsets=masked_offsets,
-        show_attempt_labels=bool(report.masked_attempts),
+        trajectory_colors=masked_trajectory_colors,
+        show_phase_change_markers=bool(report.masked_attempts),
         show_aligned_start_marker=bool(report.masked_attempts),
     )
 
@@ -864,18 +996,19 @@ def export_online_intervention_report_png(
     legend_font = _load_font(32)
     legend_y = canvas_h - legend_h + 26
     legend_x = margin_x + 10
-    swatch_w = 78
-    swatch_gap = 26
     item_gap = 92
     for label, color in _legend_items():
-        draw.line(
-            [(legend_x, legend_y + 18), (legend_x + swatch_w, legend_y + 18)],
+        _draw_square_marker(
+            draw,
+            center=(legend_x + 14, legend_y + 17),
+            radius=11,
+            outline=PHASE_MARKER_OUTLINE,
             fill=(int(color[0]), int(color[1]), int(color[2]), 255),
-            width=10,
+            width=2,
         )
-        draw.text((legend_x + swatch_w + swatch_gap, legend_y), label, fill=LEGEND_TEXT, font=legend_font)
+        draw.text((legend_x + 36, legend_y), label, fill=LEGEND_TEXT, font=legend_font)
         text_w, _ = _text_size(draw, label, font=legend_font)
-        legend_x += swatch_w + swatch_gap + text_w + item_gap
+        legend_x += text_w + 36 + item_gap
 
     marker_font = _load_font(30)
     marker_y = legend_y + 66

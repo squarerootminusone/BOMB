@@ -159,7 +159,7 @@ def main() -> None:
         action_scale=0.03,
         drive_physical_arm=True,
         render_carried_stone=True,
-        render_eef_overlay=False,
+        render_eef_overlay=True,
     )
 
     # Same instruction templates as training data (with {color} placeholder)
