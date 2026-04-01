@@ -10,7 +10,7 @@ data:
 training:
   batch_size: 4
   epochs: 20
-  learning_rate: 5e-5
+  learning_rate: 2e-5
   grad_accumulation_steps: 32
   gradient_checkpointing: false
   val_steps: 100
@@ -23,7 +23,7 @@ lora:
   quantization: false
 
 resume_from: null  # path to resume/ dir from a previous run
-warm_start_from: null  # optional path to checkpoints/latest or checkpoints/best for a fresh run
+warm_start_from: /root/dsait4125/openvla/outputs/11-08-13/checkpoints/latest  # optional path to checkpoints/latest or checkpoints/best for a fresh run
 
 wandb:
   project: openvla-masked
