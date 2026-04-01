@@ -14,6 +14,7 @@ training:
   grad_accumulation_steps: 32
   gradient_checkpointing: false
   val_steps: 100
+  resume_checkpoint_steps: 1000
 
 lora:
   enabled: true

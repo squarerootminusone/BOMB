@@ -390,9 +390,17 @@ def finetune(cfg: DictConfig) -> None:
     if resume_path is not None:
         ckpt = torch.load(resume_path / "training_state.pt", map_location=f"cuda:{device_id}")
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-        resume_step = ckpt["gradient_step"]
+        resume_step = ckpt.get("completed_steps")
+        if resume_step is None:
+            # Backward-compatibility for older checkpoints that stored the
+            # zero-based step label plus the final micro-batch index.
+            resume_batch_idx = ckpt.get("batch_idx")
+            if resume_batch_idx is not None:
+                resume_step = (resume_batch_idx + 1) // cfg.training.grad_accumulation_steps
+            else:
+                resume_step = ckpt.get("gradient_step", 0)
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
-        print(f"Resumed from step {resume_step} (best_val_loss={best_val_loss:.4f})")
+        print(f"Resumed from completed step {resume_step} (best_val_loss={best_val_loss:.4f})")
 
     # Create Action Tokenizer
     action_tokenizer = ActionTokenizer(processor.tokenizer)
@@ -413,7 +421,7 @@ def finetune(cfg: DictConfig) -> None:
         image_aug=cfg.data.image_aug,
     )
 
-    # Load Validation Dataset (held-out 5% split)
+    # Load Validation Dataset (explicit `val` split when present; otherwise a held-out fallback split)
     val_batch_transform = RLDSBatchTransform(
         action_tokenizer,
         processor.tokenizer,
@@ -430,10 +438,13 @@ def finetune(cfg: DictConfig) -> None:
         train=False,
     )
 
-    # Compute max_steps from epochs and dataset size
+    # Compute max_steps from epochs and flattened train transitions
     steps_per_epoch = len(vla_dataset) // (cfg.training.batch_size * cfg.training.grad_accumulation_steps)
     max_steps = cfg.training.epochs * steps_per_epoch
-    print(f"  {cfg.training.epochs} epochs x {steps_per_epoch} steps/epoch ({len(vla_dataset)} samples) = {max_steps} total gradient steps")
+    print(
+        f"  {cfg.training.epochs} epochs x {steps_per_epoch} optimizer steps/epoch "
+        f"({len(vla_dataset)} train transitions) = {max_steps} total optimizer steps"
+    )
 
     # [Important] Save Dataset Statistics =>> used to de-normalize actions for inference!
     if distributed_state.is_main_process:
@@ -458,15 +469,40 @@ def finetune(cfg: DictConfig) -> None:
         num_workers=0,
     )
 
-    # Validation frequency (in gradient steps)
+    # Validation frequency (in completed optimizer steps)
     val_steps = cfg.training.get("val_steps", 250)
-    resume_checkpoint_steps = 1000  # save resumable checkpoint every N gradient steps
+    resume_checkpoint_steps = cfg.training.get("resume_checkpoint_steps", 1000)
     resume_dir = output_dir / "resume"
     os.makedirs(resume_dir, exist_ok=True)
 
     # Best model tracking
+    latest_checkpoint_dir = run_dir / "latest"
+    os.makedirs(latest_checkpoint_dir, exist_ok=True)
     best_checkpoint_dir = run_dir / "best"
     os.makedirs(best_checkpoint_dir, exist_ok=True)
+
+    def _save_model_checkpoint(save_dir):
+        os.makedirs(save_dir, exist_ok=True)
+        unwrapped_vla.save_pretrained(save_dir)
+        processor.save_pretrained(save_dir)
+        save_dataset_statistics(vla_dataset.dataset_statistics, save_dir)
+
+    def _save_resume_checkpoint(step, batch_idx):
+        tqdm.tqdm.write(f"[Step {step}] Saving resumable checkpoint to {resume_dir}")
+        if cfg.lora.enabled:
+            unwrapped_vla.save_pretrained(resume_dir / "adapter")
+        else:
+            unwrapped_vla.save_pretrained(resume_dir / "model")
+        torch.save(
+            {
+                "completed_steps": step,
+                "gradient_step": step,
+                "batch_idx": batch_idx,
+                "optimizer_state_dict": optimizer.state_dict(),
+                "best_val_loss": best_val_loss,
+            },
+            resume_dir / "training_state.pt",
+        )
 
     # Initialize Logging =>> W&B
     use_wandb = False
@@ -501,20 +537,31 @@ def finetune(cfg: DictConfig) -> None:
         # Save initial checkpoint as both best and latest
         best_val_loss = val_metrics["val_loss"]
         print(f"  >> Initial val_loss={best_val_loss:.4f}, saving best & latest")
-        for save_dir in [best_checkpoint_dir, run_dir / "latest"]:
-            os.makedirs(save_dir, exist_ok=True)
-            unwrapped_vla.save_pretrained(save_dir)
-            processor.save_pretrained(save_dir)
-            save_dataset_statistics(vla_dataset.dataset_statistics, save_dir)
+        for save_dir in [best_checkpoint_dir, latest_checkpoint_dir]:
+            _save_model_checkpoint(save_dir)
+
+    if resume_step >= max_steps:
+        print(
+            f"Resume step {resume_step} already reaches max_steps={max_steps}; "
+            "saving resumable/latest checkpoints and exiting."
+        )
+        if distributed_state.is_main_process:
+            _save_model_checkpoint(latest_checkpoint_dir)
+            last_batch_idx = (resume_step * cfg.training.grad_accumulation_steps) - 1
+            _save_resume_checkpoint(resume_step, last_batch_idx)
+        return
 
     # Train!
+    completed_steps = resume_step
+    last_batch_idx = None
+    reached_max_steps = False
     with tqdm.tqdm(total=max_steps, initial=resume_step, leave=False, desc="Training") as progress:
         vla.train()
         optimizer.zero_grad()
         for batch_idx, batch in enumerate(dataloader):
             # Skip batches if resuming
-            gradient_step_idx = batch_idx // cfg.training.grad_accumulation_steps
-            if gradient_step_idx < resume_step:
+            step_group_idx = batch_idx // cfg.training.grad_accumulation_steps
+            if step_group_idx < resume_step:
                 continue
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 output: CausalLMOutputWithPast = vla(
@@ -555,9 +602,6 @@ def finetune(cfg: DictConfig) -> None:
             recent_action_accuracies.append(action_accuracy.item())
             recent_l1_losses.append(action_l1_loss.item())
 
-            # Compute gradient step index
-            gradient_step_idx = batch_idx // cfg.training.grad_accumulation_steps
-
             # Compute smoothened train metrics
             smoothened_loss = sum(recent_losses) / len(recent_losses)
             smoothened_action_accuracy = sum(recent_action_accuracies) / len(recent_action_accuracies)
@@ -570,103 +614,92 @@ def finetune(cfg: DictConfig) -> None:
                 l1=f"{smoothened_l1_loss:.4f}",
             )
 
-            # Push Metrics to W&B (every 10 gradient steps)
-            if distributed_state.is_main_process and use_wandb and gradient_step_idx % 10 == 0:
-                wandb.log(
-                    {
-                        "train_loss": smoothened_loss,
-                        "action_accuracy": smoothened_action_accuracy,
-                        "l1_loss": smoothened_l1_loss,
-                    },
-                    step=gradient_step_idx,
-                )
-
             # Optimizer Step
             if (batch_idx + 1) % cfg.training.grad_accumulation_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
+                completed_steps = step_group_idx + 1
+                last_batch_idx = batch_idx
                 progress.update()
 
-            # Run Validation periodically
-            if (
-                gradient_step_idx > 0
-                and gradient_step_idx % val_steps == 0
-                and (batch_idx + 1) % cfg.training.grad_accumulation_steps == 0
-                and distributed_state.is_main_process
-            ):
-                val_metrics = run_validation(
-                    vla, val_dataloader, action_tokenizer, unwrapped_vla, device_id
-                )
-                tqdm.tqdm.write(
-                    f"[Step {gradient_step_idx}] "
-                    f"val_loss={val_metrics['val_loss']:.4f}  "
-                    f"val_acc={val_metrics['val_accuracy']:.3f}  "
-                    f"val_l1={val_metrics['val_l1_loss']:.4f}"
-                )
-                if use_wandb:
-                    wandb.log(val_metrics, step=gradient_step_idx)
-
-                # Helper to save checkpoint (LoRA adapter only when applicable)
-                def _save_checkpoint(save_dir):
-                    os.makedirs(save_dir, exist_ok=True)
-                    unwrapped_vla.save_pretrained(save_dir)
-                    processor.save_pretrained(save_dir)
-                    save_dataset_statistics(vla_dataset.dataset_statistics, save_dir)
-
-                # Always save latest checkpoint at validation time
-                latest_dir = run_dir / "latest"
-                tqdm.tqdm.write(f"  >> Saving latest checkpoint (step {gradient_step_idx}) to {latest_dir}")
-                _save_checkpoint(latest_dir)
-
-                # Save best model if validation loss improved
-                if val_metrics["val_loss"] < best_val_loss:
-                    best_val_loss = val_metrics["val_loss"]
-                    tqdm.tqdm.write(f"  >> New best val_loss={best_val_loss:.4f}, saving to {best_checkpoint_dir}")
-                    _save_checkpoint(best_checkpoint_dir)
-
-                # Engine rollout evaluation
-                if _HAS_ENGINE:
-                    # Fixed-seed rollout (same board state every time = train sample)
-                    run_engine_rollout(
-                        unwrapped_vla, processor, device_id, output_dir,
-                        gradient_step_idx, use_wandb,
-                        dataset_statistics=vla_dataset.dataset_statistics,
-                        seed=0, tag="train_rollout",
-                    )
-                    # Random rollout (different board state each val step)
-                    run_engine_rollout(
-                        unwrapped_vla, processor, device_id, output_dir,
-                        gradient_step_idx, use_wandb,
-                        dataset_statistics=vla_dataset.dataset_statistics,
-                        tag="rollout",
+                # Push Metrics to W&B (every 10 completed optimizer steps)
+                if distributed_state.is_main_process and use_wandb and completed_steps % 10 == 0:
+                    wandb.log(
+                        {
+                            "train_loss": smoothened_loss,
+                            "action_accuracy": smoothened_action_accuracy,
+                            "l1_loss": smoothened_l1_loss,
+                        },
+                        step=completed_steps,
                     )
 
-            # Save resumable training checkpoint every N gradient steps
-            if (
-                gradient_step_idx > 0
-                and gradient_step_idx % resume_checkpoint_steps == 0
-                and (batch_idx + 1) % cfg.training.grad_accumulation_steps == 0
-                and distributed_state.is_main_process
-            ):
-                tqdm.tqdm.write(f"[Step {gradient_step_idx}] Saving resumable checkpoint to {resume_dir}")
-                if cfg.lora.enabled:
-                    unwrapped_vla.save_pretrained(resume_dir / "adapter")
-                else:
-                    unwrapped_vla.save_pretrained(resume_dir / "model")
-                torch.save(
-                    {
-                        "gradient_step": gradient_step_idx,
-                        "batch_idx": batch_idx,
-                        "optimizer_state_dict": optimizer.state_dict(),
-                        "best_val_loss": best_val_loss,
-                    },
-                    resume_dir / "training_state.pt",
-                )
+                # Run Validation periodically
+                if (
+                    completed_steps > 0
+                    and completed_steps % val_steps == 0
+                    and distributed_state.is_main_process
+                ):
+                    val_metrics = run_validation(
+                        vla, val_dataloader, action_tokenizer, unwrapped_vla, device_id
+                    )
+                    tqdm.tqdm.write(
+                        f"[Step {completed_steps}] "
+                        f"val_loss={val_metrics['val_loss']:.4f}  "
+                        f"val_acc={val_metrics['val_accuracy']:.3f}  "
+                        f"val_l1={val_metrics['val_l1_loss']:.4f}"
+                    )
+                    if use_wandb:
+                        wandb.log(val_metrics, step=completed_steps)
 
-            # Stop training when max_steps is reached
-            if gradient_step_idx == max_steps:
-                print(f"Max step {max_steps} reached! Stopping training...")
-                break
+                    # Always save latest checkpoint at validation time
+                    tqdm.tqdm.write(
+                        f"  >> Saving latest checkpoint (step {completed_steps}) to {latest_checkpoint_dir}"
+                    )
+                    _save_model_checkpoint(latest_checkpoint_dir)
+
+                    # Save best model if validation loss improved
+                    if val_metrics["val_loss"] < best_val_loss:
+                        best_val_loss = val_metrics["val_loss"]
+                        tqdm.tqdm.write(
+                            f"  >> New best val_loss={best_val_loss:.4f}, saving to {best_checkpoint_dir}"
+                        )
+                        _save_model_checkpoint(best_checkpoint_dir)
+
+                    # Engine rollout evaluation
+                    if _HAS_ENGINE:
+                        # Fixed-seed rollout (same board state every time = train sample)
+                        run_engine_rollout(
+                            unwrapped_vla, processor, device_id, output_dir,
+                            completed_steps, use_wandb,
+                            dataset_statistics=vla_dataset.dataset_statistics,
+                            seed=0, tag="train_rollout",
+                        )
+                        # Random rollout (different board state each val step)
+                        run_engine_rollout(
+                            unwrapped_vla, processor, device_id, output_dir,
+                            completed_steps, use_wandb,
+                            dataset_statistics=vla_dataset.dataset_statistics,
+                            tag="rollout",
+                        )
+
+                # Save resumable training checkpoint every N completed optimizer steps
+                if (
+                    completed_steps > 0
+                    and completed_steps % resume_checkpoint_steps == 0
+                    and distributed_state.is_main_process
+                ):
+                    _save_resume_checkpoint(completed_steps, batch_idx)
+
+                # Stop training when max_steps is reached
+                if completed_steps >= max_steps:
+                    print(f"Max step {max_steps} reached! Stopping training...")
+                    reached_max_steps = True
+                    break
+
+    if reached_max_steps and distributed_state.is_main_process:
+        tqdm.tqdm.write(f"[Step {completed_steps}] Saving final latest checkpoint to {latest_checkpoint_dir}")
+        _save_model_checkpoint(latest_checkpoint_dir)
+        _save_resume_checkpoint(completed_steps, last_batch_idx)
 
 
 if __name__ == "__main__":
