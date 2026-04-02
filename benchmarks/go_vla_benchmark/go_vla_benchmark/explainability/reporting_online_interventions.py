@@ -29,7 +29,7 @@ RELEASE_MARKER_OUTLINE = (150, 55, 52, 236)
 PHASE_MARKER_OUTLINE = (255, 255, 255, 244)
 START_MARKER_FILL = (255, 255, 255, 248)
 START_MARKER_OUTLINE = (28, 35, 44, 232)
-GRIPPER_CLOSE_THRESHOLD = 0.8
+DEFAULT_PICKUP_ATTEMPT_MARKER_THRESHOLD = 0.8
 MIN_TRAJECTORY_OPACITY = 0.7
 ATTEMPT_ACCENT_COLORS = (
     (37, 99, 235, 255),
@@ -228,15 +228,27 @@ def _accent_color(color: Sequence[int], alpha: int) -> tuple[int, int, int, int]
     return (rgb[0], rgb[1], rgb[2], int(alpha))
 
 
+def _normalize_pickup_attempt_marker_threshold(threshold: float | None) -> float | None:
+    if threshold is None:
+        return None
+    value = float(threshold)
+    if not np.isfinite(value):
+        raise ValueError("pickup attempt marker threshold must be finite")
+    return value
+
+
 def _marker_events(
     attempt: OnlineInterventionAttempt,
+    *,
+    pickup_attempt_marker_threshold: float | None = DEFAULT_PICKUP_ATTEMPT_MARKER_THRESHOLD,
 ) -> tuple[list[tuple[np.ndarray, int]], list[tuple[np.ndarray, int]], list[tuple[np.ndarray, int]]]:
     pickup_attempts: list[tuple[np.ndarray, int]] = []
     grasped_points: list[tuple[np.ndarray, int]] = []
     releases: list[tuple[np.ndarray, int]] = []
     previous_step = None
+    threshold = _normalize_pickup_attempt_marker_threshold(pickup_attempt_marker_threshold)
     for step_idx, step in enumerate(attempt.trajectory):
-        if float(step.gripper_action) > GRIPPER_CLOSE_THRESHOLD and not bool(step.stone_grasped):
+        if threshold is not None and float(step.gripper_action) > threshold and not bool(step.stone_grasped):
             pickup_attempts.append((np.asarray(step.eef_xyz, dtype=np.float32), int(step_idx)))
         if bool(step.stone_grasped):
             grasped_points.append((np.asarray(step.eef_xyz, dtype=np.float32), int(step_idx)))
@@ -388,8 +400,12 @@ def _draw_attempt_markers(
     alpha: int,
     alpha_mode: str,
     xy_offset: np.ndarray | None = None,
+    pickup_attempt_marker_threshold: float | None = DEFAULT_PICKUP_ATTEMPT_MARKER_THRESHOLD,
 ) -> None:
-    pickup_attempts, grasped_points, releases = _marker_events(attempt)
+    pickup_attempts, grasped_points, releases = _marker_events(
+        attempt,
+        pickup_attempt_marker_threshold=pickup_attempt_marker_threshold,
+    )
     step_count = max(1, len(attempt.trajectory))
 
     for xyz, step_idx in pickup_attempts:
@@ -996,6 +1012,7 @@ def _draw_plot_content(
     show_aligned_start_marker: bool = False,
     trajectory_colors: Sequence[Sequence[int] | None] | None = None,
     show_phase_change_markers: bool = False,
+    pickup_attempt_marker_threshold: float | None = DEFAULT_PICKUP_ATTEMPT_MARKER_THRESHOLD,
 ) -> Image.Image:
     if attempt_xy_offsets is None:
         xy_offsets = [np.zeros((2,), dtype=np.float32) for _ in attempts]
@@ -1054,6 +1071,7 @@ def _draw_plot_content(
             alpha=min(255, alpha + 36),
             alpha_mode=alpha_mode,
             xy_offset=xy_offset,
+            pickup_attempt_marker_threshold=pickup_attempt_marker_threshold,
         )
         image = Image.alpha_composite(image, attempt_layer)
     if show_aligned_start_marker:
@@ -1159,15 +1177,20 @@ def _draw_event_legend_row(
     origin: tuple[int, int],
     font: ImageFont.ImageFont,
     include_aligned_start: bool,
+    include_pickup_attempt: bool,
 ) -> None:
     x, y = origin
-    items = [
-        ("pickup_attempt", "Pickup Attempt"),
-        ("grasp_hold", "Grasped / Hold"),
-        ("release", "Release / Commit"),
-        ("source", "Source"),
-        ("target", "Target"),
-    ]
+    items: list[tuple[str, str]] = []
+    if include_pickup_attempt:
+        items.append(("pickup_attempt", "Pickup Attempt"))
+    items.extend(
+        [
+            ("grasp_hold", "Grasped / Hold"),
+            ("release", "Release / Commit"),
+            ("source", "Source"),
+            ("target", "Target"),
+        ]
+    )
     if include_aligned_start:
         items.append(("aligned_start", "Aligned Start"))
 
@@ -1267,6 +1290,7 @@ def _export_online_intervention_report_png_paper_style_pil(
     output_path: Path,
     *,
     alpha_mode: str,
+    pickup_attempt_marker_threshold: float | None,
     z_min: float,
     z_max: float,
     baseline_offsets: Sequence[np.ndarray],
@@ -1345,6 +1369,7 @@ def _export_online_intervention_report_png_paper_style_pil(
         alpha_mode=alpha_mode,
         attempt_xy_offsets=baseline_offsets,
         show_phase_change_markers=True,
+        pickup_attempt_marker_threshold=pickup_attempt_marker_threshold,
     )
     draw = ImageDraw.Draw(image, "RGBA")
     _draw_reference_markers(
@@ -1372,6 +1397,7 @@ def _export_online_intervention_report_png_paper_style_pil(
         trajectory_colors=masked_trajectory_colors,
         show_phase_change_markers=bool(report.masked_attempts),
         show_aligned_start_marker=bool(report.masked_attempts),
+        pickup_attempt_marker_threshold=pickup_attempt_marker_threshold,
     )
 
     draw = ImageDraw.Draw(image, "RGBA")
@@ -1403,6 +1429,7 @@ def _export_online_intervention_report_png_paper_style_pil(
         origin=(legend_x, event_header_y + 38),
         font=phase_font,
         include_aligned_start=bool(report.masked_attempts),
+        include_pickup_attempt=pickup_attempt_marker_threshold is not None,
     )
 
     _draw_attempt_legend(
@@ -1426,12 +1453,14 @@ def export_online_intervention_report_png(
     output_path: Path,
     *,
     trajectory_alpha_mode: str = "time",
+    pickup_attempt_marker_threshold: float | None = None,
 ) -> Path:
     output_path = Path(output_path).expanduser().resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     alpha_mode = str(trajectory_alpha_mode).strip().lower()
     if alpha_mode not in {"height", "time"}:
         raise ValueError(f"unsupported trajectory alpha mode: {trajectory_alpha_mode}")
+    marker_threshold = _normalize_pickup_attempt_marker_threshold(pickup_attempt_marker_threshold)
 
     z_min, z_max = _height_bounds(report)
     baseline_offsets = [np.zeros((2,), dtype=np.float32)]
@@ -1469,6 +1498,7 @@ def export_online_intervention_report_png(
             report,
             output_path,
             alpha_mode=alpha_mode,
+            pickup_attempt_marker_threshold=marker_threshold,
             z_min=z_min,
             z_max=z_max,
             baseline_offsets=baseline_offsets,
@@ -1528,6 +1558,7 @@ def export_online_intervention_report_png(
         trajectory_color: Sequence[int] | None = None,
         line_width: float,
         show_phase_change_markers: bool,
+        pickup_attempt_marker_threshold: float | None,
     ) -> None:
         points_xy = _attempt_xy_points(attempt, xy_offset=xy_offset)
         if len(points_xy) >= 2:
@@ -1592,7 +1623,10 @@ def export_online_intervention_report_png(
                     zorder=4,
                 )
 
-        pickup_attempts, grasped_points, releases = _marker_events(attempt)
+        pickup_attempts, grasped_points, releases = _marker_events(
+            attempt,
+            pickup_attempt_marker_threshold=pickup_attempt_marker_threshold,
+        )
         for xyz, _step_idx in pickup_attempts:
             xy = _offset_projected_xy(xyz, xy_offset=xy_offset)
             ax.scatter(
@@ -1656,6 +1690,7 @@ def export_online_intervention_report_png(
         trajectory_color=None,
         line_width=3.2,
         show_phase_change_markers=True,
+        pickup_attempt_marker_threshold=marker_threshold,
     )
     _plot_reference_markers(baseline_ax, report.baseline, xy_offset=baseline_offsets[0])
 
@@ -1668,6 +1703,7 @@ def export_online_intervention_report_png(
             trajectory_color=trajectory_color,
             line_width=2.4,
             show_phase_change_markers=True,
+            pickup_attempt_marker_threshold=marker_threshold,
         )
     if report.masked_attempts and report.masked_attempts[0].trajectory:
         aligned_start_xy = _attempt_xy_points(report.masked_attempts[0], xy_offset=masked_offsets[0])[0]
@@ -1685,61 +1721,67 @@ def export_online_intervention_report_png(
         Line2D([0], [0], color=_mpl_rgba(color, 1.0), lw=3.0, label=label)
         for label, color in _legend_items()
     ]
-    event_handles = [
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="None",
-            markersize=7.0,
-            markerfacecolor="white",
-            markeredgecolor=_mpl_rgba(MARKER_OUTLINE, 0.95),
-            markeredgewidth=1.2,
-            label="Pickup Attempt",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="None",
-            markersize=6.0,
-            markerfacecolor=_mpl_rgba(MARKER_SOLID, 0.95),
-            markeredgecolor=_mpl_rgba(MARKER_SOLID, 0.95),
-            label="Grasped / Hold",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="D",
-            linestyle="None",
-            markersize=7.0,
-            markerfacecolor="white",
-            markeredgecolor=_mpl_rgba(RELEASE_MARKER_OUTLINE, 0.95),
-            markeredgewidth=1.2,
-            label="Release / Commit",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="None",
-            markersize=7.0,
-            markerfacecolor="white",
-            markeredgecolor=_mpl_rgba((17, 24, 39), 1.0),
-            markeredgewidth=1.3,
-            label="Source",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="X",
-            linestyle="None",
-            markersize=7.2,
-            markerfacecolor=_mpl_rgba((17, 24, 39), 1.0),
-            markeredgecolor=_mpl_rgba((17, 24, 39), 1.0),
-            label="Target",
-        ),
-    ]
+    event_handles: list[object] = []
+    if marker_threshold is not None:
+        event_handles.append(
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                markersize=7.0,
+                markerfacecolor="white",
+                markeredgecolor=_mpl_rgba(MARKER_OUTLINE, 0.95),
+                markeredgewidth=1.2,
+                label="Pickup Attempt",
+            )
+        )
+    event_handles.extend(
+        [
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                markersize=6.0,
+                markerfacecolor=_mpl_rgba(MARKER_SOLID, 0.95),
+                markeredgecolor=_mpl_rgba(MARKER_SOLID, 0.95),
+                label="Grasped / Hold",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="D",
+                linestyle="None",
+                markersize=7.0,
+                markerfacecolor="white",
+                markeredgecolor=_mpl_rgba(RELEASE_MARKER_OUTLINE, 0.95),
+                markeredgewidth=1.2,
+                label="Release / Commit",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                linestyle="None",
+                markersize=7.0,
+                markerfacecolor="white",
+                markeredgecolor=_mpl_rgba((17, 24, 39), 1.0),
+                markeredgewidth=1.3,
+                label="Source",
+            ),
+            Line2D(
+                [0],
+                [0],
+                marker="X",
+                linestyle="None",
+                markersize=7.2,
+                markerfacecolor=_mpl_rgba((17, 24, 39), 1.0),
+                markeredgecolor=_mpl_rgba((17, 24, 39), 1.0),
+                label="Target",
+            ),
+        ]
+    )
     if report.masked_attempts:
         event_handles.append(
             Line2D(

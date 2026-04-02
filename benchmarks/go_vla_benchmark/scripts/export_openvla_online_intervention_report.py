@@ -101,6 +101,12 @@ def parse_args() -> argparse.Namespace:
         const="height",
         help="fade plotted trajectory opacity by end-effector height instead of time",
     )
+    parser.add_argument(
+        "--pickup-attempt-marker-threshold",
+        type=float,
+        default=None,
+        help="optional gripper-action threshold for rendering pickup-attempt markers; disabled by default",
+    )
     parser.add_argument("--camera-size", type=int, default=256)
     parser.add_argument("--opening-moves", type=int, default=0)
     parser.add_argument("--stone-color", type=str, default="black")
@@ -264,6 +270,7 @@ def main() -> None:
             report=report,
             output_path=report_output_png,
             trajectory_alpha_mode=trajectory_alpha_mode,
+            pickup_attempt_marker_threshold=args.pickup_attempt_marker_threshold,
         )
 
         manifest = online_text_mask_report_manifest(report)
@@ -287,6 +294,11 @@ def main() -> None:
         ]
         manifest["video_fps"] = int(args.video_fps)
         manifest["trajectory_alpha_mode"] = trajectory_alpha_mode
+        manifest["pickup_attempt_marker_threshold"] = (
+            None
+            if args.pickup_attempt_marker_threshold is None
+            else float(args.pickup_attempt_marker_threshold)
+        )
         if report_summary_path is not None:
             report_summary_path.parent.mkdir(parents=True, exist_ok=True)
             report_summary_path.write_text(json.dumps(manifest, indent=2))

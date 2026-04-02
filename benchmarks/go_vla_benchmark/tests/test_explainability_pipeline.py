@@ -1316,12 +1316,22 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 trajectory_alpha_mode="time",
             )
             self.assertTrue(png_time_path.is_file())
+            png_pickup_path = tmp_path / "online_task_report_with_pickup_attempts.png"
+            export_online_intervention_report_png(
+                report=report,
+                output_path=png_pickup_path,
+                trajectory_alpha_mode="time",
+                pickup_attempt_marker_threshold=0.8,
+            )
+            self.assertTrue(png_pickup_path.is_file())
 
             image = np.asarray(Image.open(png_path))
             time_image = np.asarray(Image.open(png_time_path))
+            pickup_image = np.asarray(Image.open(png_pickup_path))
             self.assertGreater(int(image.shape[0]), 400)
             self.assertGreater(int(image.shape[1]), 900)
             np.testing.assert_array_equal(image, time_image)
+            self.assertFalse(np.array_equal(image, pickup_image))
             self.assertTrue(_contains_rgb(image, np.asarray([45, 91, 188], dtype=np.uint8)))
             self.assertTrue(_contains_rgb(image, np.asarray([196, 67, 64], dtype=np.uint8)))
             self.assertTrue(_contains_rgb(image, np.asarray([28, 35, 44], dtype=np.uint8)))
@@ -1570,6 +1580,78 @@ class ExplainabilityPipelineTest(unittest.TestCase):
         self.assertEqual([step_idx for _xyz, step_idx in grasped_points], [2])
         self.assertEqual([step_idx for _xyz, step_idx in releases], [3])
 
+    def test_marker_events_can_disable_pickup_attempt_markers(self) -> None:
+        attempt = OnlineInterventionAttempt(
+            attempt_index=1,
+            title="Mask Attempt 1",
+            instruction="Place a black stone on the Go board at row 3, column 4.",
+            masked=True,
+            mask=None,
+            success=False,
+            timed_out=False,
+            steps_taken=1,
+            phase_counts={
+                "move_to_puck": 1,
+                "pick_up_puck": 0,
+                "move_puck": 0,
+                "drop_puck": 1,
+            },
+            trajectory=[
+                OnlineInterventionStep(
+                    timestep=0,
+                    eef_xyz=np.asarray([0.00, 0.00, 0.90], dtype=np.float32),
+                    stone_xyz=np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    action_xyzg=np.asarray([0.0, 0.0, 0.0, 0.81], dtype=np.float32),
+                    gripper_action=0.81,
+                    phase="move_to_puck",
+                    move_committed=False,
+                    stone_grasped=False,
+                    dist_to_source_xy=0.01,
+                    dist_to_target_xy=0.20,
+                ),
+                OnlineInterventionStep(
+                    timestep=1,
+                    eef_xyz=np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                    stone_xyz=np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                    action_xyzg=np.asarray([0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+                    gripper_action=0.0,
+                    phase="drop_puck",
+                    move_committed=True,
+                    stone_grasped=False,
+                    dist_to_source_xy=0.31,
+                    dist_to_target_xy=0.0,
+                ),
+            ],
+            target_row=3,
+            target_col=4,
+            target_xyz=np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+            source_xyz=np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+            final_stone_xyz=np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+            phase_transition_steps={
+                "move_to_puck": 0,
+                "pick_up_puck": None,
+                "move_puck": None,
+                "drop_puck": 1,
+            },
+            event_steps={
+                "first_grasp": None,
+                "first_move_puck": None,
+                "first_drop": 1,
+            },
+            ever_grasped=False,
+            ever_moved_puck=False,
+            ever_released=True,
+        )
+
+        pickup_attempts, grasped_points, releases = _marker_events(
+            attempt,
+            pickup_attempt_marker_threshold=None,
+        )
+
+        self.assertEqual(pickup_attempts, [])
+        self.assertEqual(grasped_points, [])
+        self.assertEqual([step_idx for _xyz, step_idx in releases], [1])
+
     def test_online_report_renderer_accumulates_identical_masked_attempts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = Path(tmpdir)
@@ -1661,15 +1743,24 @@ class ExplainabilityPipelineTest(unittest.TestCase):
 
             single_path = tmp_path / "single_masked_attempt.png"
             double_path = tmp_path / "double_masked_attempt.png"
+            single_with_pickup_path = tmp_path / "single_masked_attempt_with_pickup.png"
             export_online_intervention_report_png(report=report_single, output_path=single_path, trajectory_alpha_mode="time")
             export_online_intervention_report_png(report=report_double, output_path=double_path, trajectory_alpha_mode="time")
+            export_online_intervention_report_png(
+                report=report_single,
+                output_path=single_with_pickup_path,
+                trajectory_alpha_mode="time",
+                pickup_attempt_marker_threshold=0.8,
+            )
 
             single_image = np.asarray(Image.open(single_path), dtype=np.int16)
             double_image = np.asarray(Image.open(double_path), dtype=np.int16)
+            single_with_pickup_image = np.asarray(Image.open(single_with_pickup_path), dtype=np.int16)
 
             right_single = single_image[:, single_image.shape[1] // 2 :, :]
             right_double = double_image[:, double_image.shape[1] // 2 :, :]
             self.assertFalse(np.array_equal(single_image, double_image))
+            self.assertFalse(np.array_equal(single_image, single_with_pickup_image))
             self.assertLess(int(right_double.sum()), int(right_single.sum()))
 
     def test_collect_online_report_tracking_dot_falls_back_to_topdown_projection(self) -> None:

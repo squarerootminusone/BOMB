@@ -153,6 +153,12 @@ The renderer now overlays three marker types on both panels:
 - release markers where grasp changes `True -> False` or
   `move_committed=True`: release / commit
 
+Pickup-attempt markers are now disabled by default. To turn them on, pass
+`--pickup-attempt-marker-threshold <float>`, for example
+`--pickup-attempt-marker-threshold 0.8`. The threshold is compared against
+`gripper_action`, so only steps with `gripper_action > threshold` and
+`stone_grasped=False` get the hollow pickup-attempt marker.
+
 On the masked panel the renderer also aligns the masked rollout starting points
 to the same `x,y` origin before drawing, so the overlaid paths compare how the
 interventions diverge after the shared start rather than showing reset-offset
@@ -248,6 +254,8 @@ Useful selection flags:
 - `--stride` to match the reference-frame sampling used by the offline
   intervention collector
 - `--reference-step` to choose which kept frame supplies the mask
+- `--pickup-attempt-marker-threshold` to enable pickup-attempt markers at a
+  chosen `gripper_action` threshold; leave it unset to keep those markers off
 
 If multiple demos are selected, the exporter writes one PNG / JSON / MP4 set per
 demo with a demo-key suffix while keeping the dataset order.
