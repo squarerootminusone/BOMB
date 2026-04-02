@@ -43,5 +43,25 @@ Key flags: `--num-demos` (number of source demos), `--camera-size` (image resolu
 - **Robosuite scene cameras**: `agentview` (default), `birdview` (top-down), `frontview`, `sideview`, `robot0_eye_in_hand`. Use `sim.render(camera_name=...)` to switch.
 - **Visual vs collision geoms share the same `pos`/`quat`** — they are co-located. Grid lines are painted via texture on the visual geom, not via the invisible `go_line_*` geoms (which exist only for broadphase stability).
 
-## Remote Training Setup
-See [openvla-oft/SETUP_REMOTE.md](openvla-oft/SETUP_REMOTE.md) for vast.ai setup instructions.
+## Remote Setup
+
+- OpenVLA-OFT: [openvla-oft/SETUP_REMOTE.md](openvla-oft/SETUP_REMOTE.md)
+- RoboTwin: [benchmarks/RoboTwin/SETUP_REMOTE.md](benchmarks/RoboTwin/SETUP_REMOTE.md)
+- Motus training: [benchmarks/RoboTwin/SETUP_MOTUS.md](benchmarks/RoboTwin/SETUP_MOTUS.md)
+
+---
+
+# RoboTwin 2.0 — Go Stone Placement
+
+## Overview
+
+The `robotwin-2` branch ports the Go stone manipulation task to **RoboTwin 2.0** (SAPIEN-based), outputting data in **Motus format** for Motus training/inference. Uses ALOHA dual-arm robot with left arm active, right arm at home pose (14D qpos native to Motus).
+
+## RoboTwin Gotchas
+
+- **SAPIEN/PhysX cylinder primitives have their height axis along X.** Both collision and render shapes need a 90° Y rotation (`set_local_pose`) so the flat faces are parallel to the table. Always rotate both together or physics and visuals will disagree.
+- **Board intersection positions must come from SAPIEN's `actor.get_pose().to_transformation_matrix()`** — same principle as MuJoCo's `geom_xpos`.
+- **EE-to-stone offset**: After grasping, the stone hangs below the end-effector. Target poses must compensate for this offset or the stone will land ~3-5cm off.
+- **Blackwell (SM 120) GPUs** need PyTorch 2.7+ and CUDA 12.8+ nvcc. PyTorch 2.4.x only supports up to SM 90.
+- **OIDN denoiser errors** on Blackwell are cosmetic — rendering still works fine.
+- **Table color must stay mid-tone** (never pure white or black) to avoid confusion with stones.
