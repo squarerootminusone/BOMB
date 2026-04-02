@@ -104,6 +104,7 @@ class OnlineInterventionReport:
     intervention_kind: str
     reference_frame_index: Optional[int]
     reset_seed: Optional[int]
+    simulator_seed: Optional[int]
     text_mask: Optional[TextMaskCandidateSpec]
     patch_mask: Optional[PatchMaskCandidateSpec]
     baseline: OnlineInterventionAttempt
@@ -276,6 +277,43 @@ def _optional_xyz_from_pose(pose_or_xyz: Optional[np.ndarray]) -> Optional[np.nd
     if pose_or_xyz is None:
         return None
     return _xyz_from_pose(pose_or_xyz)
+
+
+def _draw_disk(image: np.ndarray, *, row: int, col: int, radius: int, color: np.ndarray) -> None:
+    height, width = image.shape[:2]
+    row_start = max(0, int(row) - int(radius))
+    row_end = min(height - 1, int(row) + int(radius))
+    col_start = max(0, int(col) - int(radius))
+    col_end = min(width - 1, int(col) + int(radius))
+    for rr in range(row_start, row_end + 1):
+        for cc in range(col_start, col_end + 1):
+            if (rr - int(row)) * (rr - int(row)) + (cc - int(col)) * (cc - int(col)) <= int(radius) * int(radius):
+                image[rr, cc] = color
+
+
+def _frame_with_tracking_overlay(*, env: OnlineInterventionEnv, image: np.ndarray) -> np.ndarray:
+    rendered = np.asarray(image, dtype=np.uint8).copy()
+    if bool(getattr(env, "render_eef_overlay", False)):
+        return rendered
+
+    xy_to_image_rc = getattr(env, "_xy_to_image_rc", None)
+    if not callable(xy_to_image_rc):
+        return rendered
+
+    try:
+        eef_xyz = _xyz_from_pose(env.get_eef_pose())
+        row, col = xy_to_image_rc(eef_xyz[:2], int(rendered.shape[0]), int(rendered.shape[1]))
+    except Exception:
+        return rendered
+
+    _draw_disk(
+        rendered,
+        row=int(row),
+        col=int(col),
+        radius=2,
+        color=np.asarray([0, 255, 255], dtype=np.uint8),
+    )
+    return rendered
 
 
 def _prepare_policy_image(image: np.ndarray) -> np.ndarray:
@@ -611,7 +649,10 @@ def _rollout_attempt(
     if "agentview_image" not in obs:
         raise RuntimeError("online intervention rollouts require env observations with `agentview_image`")
     if frame_callback is not None:
-        frame_callback(np.asarray(obs["agentview_image"], dtype=np.uint8).copy(), 0)
+        frame_callback(
+            _frame_with_tracking_overlay(env=env, image=np.asarray(obs["agentview_image"], dtype=np.uint8)),
+            0,
+        )
 
     target_xyz = _xyz_from_pose(env.get_target_pose())
     source_xyz = _xyz_from_pose(env.get_source_stone_pose())
@@ -659,7 +700,10 @@ def _rollout_attempt(
 
         obs, _reward, done, info = env.step(action_xyzg[:4].astype(np.float32))
         if frame_callback is not None:
-            frame_callback(np.asarray(obs["agentview_image"], dtype=np.uint8).copy(), timestep + 1)
+            frame_callback(
+                _frame_with_tracking_overlay(env=env, image=np.asarray(obs["agentview_image"], dtype=np.uint8)),
+                timestep + 1,
+            )
         last_info = dict(info)
         current_stone_xyz = _optional_xyz_from_pose(env.get_task_stone_pose())
         phase = phase_tracker.update(
@@ -735,6 +779,7 @@ def collect_online_intervention_report(
     reset_options: Optional[GoResetOptions] = None,
     demo_key: Optional[str] = None,
     reference_frame_index: Optional[int] = None,
+    simulator_seed: Optional[int] = None,
     baseline_frame_callback: Optional[Callable[[np.ndarray, int], None]] = None,
     masked_attempt_frame_callbacks: Optional[Sequence[Optional[Callable[[np.ndarray, int], None]]]] = None,
 ) -> OnlineInterventionReport:
@@ -801,6 +846,7 @@ def collect_online_intervention_report(
             intervention_kind=str(intervention_kind),
             reference_frame_index=None if reference_frame_index is None else int(reference_frame_index),
             reset_seed=None if resolved_reset_options.reset_seed is None else int(resolved_reset_options.reset_seed),
+            simulator_seed=None if simulator_seed is None else int(simulator_seed),
             text_mask=primary_mask if isinstance(primary_mask, TextMaskCandidateSpec) else None,
             patch_mask=primary_mask if isinstance(primary_mask, PatchMaskCandidateSpec) else None,
             baseline=baseline,
@@ -933,6 +979,7 @@ def online_text_mask_report_manifest(report: OnlineInterventionReport) -> Dict[s
         "target_col": int(report.target_col),
         "max_steps": int(report.max_steps),
         "reset_seed": None if report.reset_seed is None else int(report.reset_seed),
+        "simulator_seed": None if report.simulator_seed is None else int(report.simulator_seed),
         "baseline": _attempt_to_dict(report.baseline),
         "masked_attempts": [_attempt_to_dict(attempt) for attempt in report.masked_attempts],
         "intervention_kind": str(report.intervention_kind),

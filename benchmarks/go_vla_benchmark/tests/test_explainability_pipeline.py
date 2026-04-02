@@ -1278,14 +1278,6 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 list(range(report.baseline.steps_taken + 1)),
             )
             self.assertEqual(captured_baseline_frames[0][1].shape, (12, 12, 3))
-            self.assertTrue(
-                np.any(
-                    np.all(
-                        captured_baseline_frames[0][1] == np.asarray([0, 255, 255], dtype=np.uint8),
-                        axis=-1,
-                    )
-                )
-            )
             self.assertTrue(report.baseline.ever_grasped)
             self.assertTrue(report.baseline.ever_moved_puck)
             self.assertTrue(report.baseline.ever_released)
@@ -1331,11 +1323,10 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             self.assertGreater(int(image.shape[0]), 400)
             self.assertGreater(int(image.shape[1]), 900)
             np.testing.assert_array_equal(image, time_image)
-            self.assertFalse(np.array_equal(image, pickup_image))
+            np.testing.assert_array_equal(image, pickup_image)
             self.assertTrue(_contains_rgb(image, np.asarray([45, 91, 188], dtype=np.uint8)))
             self.assertTrue(_contains_rgb(image, np.asarray([196, 67, 64], dtype=np.uint8)))
             self.assertTrue(_contains_rgb(image, np.asarray([28, 35, 44], dtype=np.uint8)))
-            self.assertTrue(_contains_rgb(image, np.asarray([150, 55, 52], dtype=np.uint8)))
             legend_band = image[(image.shape[0] * 2) // 3 :, :, :]
             self.assertTrue(_contains_rgb(legend_band, np.asarray([45, 91, 188], dtype=np.uint8)))
             self.assertTrue(_contains_rgb(legend_band, np.asarray([196, 67, 64], dtype=np.uint8)))
@@ -1760,7 +1751,7 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             right_single = single_image[:, single_image.shape[1] // 2 :, :]
             right_double = double_image[:, double_image.shape[1] // 2 :, :]
             self.assertFalse(np.array_equal(single_image, double_image))
-            self.assertFalse(np.array_equal(single_image, single_with_pickup_image))
+            np.testing.assert_array_equal(single_image, single_with_pickup_image)
             self.assertLess(int(right_double.sum()), int(right_single.sum()))
 
     def test_collect_online_report_tracking_dot_falls_back_to_topdown_projection(self) -> None:
@@ -2308,6 +2299,49 @@ class ExplainabilityPipelineTest(unittest.TestCase):
         self.assertNotEqual(report_a.reset_seed, report_b.reset_seed)
         self.assertEqual(report_a.reset_seed, env_a.reset_options_history[0].reset_seed)
         self.assertEqual(report_b.reset_seed, env_b.reset_options_history[0].reset_seed)
+
+    def test_online_report_manifest_includes_simulator_seed(self) -> None:
+        scenario = {
+            "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+            "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+            "initial": {
+                "eef_xyz": np.asarray([-0.14, -0.09, 0.95], dtype=np.float32),
+                "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                "stone_grasped": False,
+                "move_committed": False,
+            },
+            "steps": [
+                {
+                    "eef_xyz": np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                    "stone_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                    "stone_grasped": False,
+                    "move_committed": True,
+                    "done": True,
+                },
+            ],
+        }
+
+        report = collect_online_intervention_report(
+            policy=_FakeOnlinePolicy(),
+            env_factory=lambda: _FakeOnlineEnv(scenarios=[scenario]),
+            instruction="Place a black stone on the Go board at row 3, column 4.",
+            target_row=3,
+            target_col=4,
+            max_steps=1,
+            masked_attempts=0,
+            checkpoint="/tmp/fake-openvla",
+            demo_key="sim_demo_000",
+            simulator_seed=17,
+            reset_options=GoResetOptions(
+                opening_moves=2,
+                target_row=3,
+                target_col=4,
+                stone_color="black",
+            ),
+        )
+
+        manifest = online_text_mask_report_manifest(report)
+        self.assertEqual(manifest["simulator_seed"], 17)
 
     def test_collect_and_roundtrip_causal_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

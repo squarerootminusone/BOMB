@@ -47,9 +47,10 @@ The report layout stays paper-style:
   spans or patch candidates from the reference frame instead of rerunning one
   identical mask repeatedly
 - each masked rollout stays identifiable through its legend entry and color
-- the bottom legends group task phases, event markers, and the unmasked plus
-  masked attempt labels in a paper-friendly layout
+- the bottom legends group task phases, reference markers, and the unmasked
+  plus masked attempt labels in a paper-friendly layout
 - the exported PNG contains no extra GUI text
+- the exported PNG no longer draws pickup / grasp / release event markers
 
 The plotted trajectory is the arm / end-effector path shown in a true top-down
 `x,y` view. By default opacity fades by time: the run starts at 70% opacity and
@@ -124,19 +125,24 @@ For each sampled simulator demo it:
 This is the easiest way to run text or patch masking online when you do not
 have an HDF5 dataset on hand.
 
-Reset-time randomness is also anchored per report now:
+Simulator sampling is also anchored per report now:
 
 - different demos no longer restart from the same reset-1 RNG state when they
   share the same CLI `--seed`
-- the exporter derives a stable per-demo reset seed from the base seed and the
-  dataset demo identity
+- each sampled simulator demo gets its own reproducible per-demo
+  `simulator_seed`, derived from the CLI `--seed`
+- rerunning with the same CLI `--seed` reproduces the same ordered list of
+  simulator demos
+- rerunning a single demo with `--seed <simulator_seed> --simulator-demos 1`
+  reproduces that exact sampled scene on its own
 - baseline and masked attempts for one demo reuse that same reset seed, so
   board pose, lighting, camera, source-stone placement, fallback opening
   sampling, and other reset-time random variables stay matched for fair
   comparison
-- rerunning with the same CLI `--seed` reproduces the same per-demo scenes
+- the per-demo JSON manifest prints both the CLI `seed` and that demo's
+  `simulator_seed`
 
-## Trajectory Markers
+## Trajectory Metadata And Alignment
 
 The rollout format did not need a structural rewrite. It already records
 
@@ -145,19 +151,9 @@ The rollout format did not need a structural rewrite. It already records
 - `move_committed`
 - per-step `phase`
 
-The renderer now overlays three marker types on both panels:
-
-- hollow markers where the gripper is closing very aggressively but the stone is
-  not grasped yet: pickup attempt
-- filled markers where `stone_grasped=True`: actual hold / transport
-- release markers where grasp changes `True -> False` or
-  `move_committed=True`: release / commit
-
-Pickup-attempt markers are now disabled by default. To turn them on, pass
-`--pickup-attempt-marker-threshold <float>`, for example
-`--pickup-attempt-marker-threshold 0.8`. The threshold is compared against
-`gripper_action`, so only steps with `gripper_action > threshold` and
-`stone_grasped=False` get the hollow pickup-attempt marker.
+Those event fields are kept in the JSON manifest, but the publication PNG now
+leaves pickup / grasp / release event markers out of the plot so the trajectory
+figure stays cleaner.
 
 On the masked panel the renderer also aligns the masked rollout starting points
 to the same `x,y` origin before drawing, so the overlaid paths compare how the
@@ -175,6 +171,7 @@ The JSON manifest includes:
 - `ever_moved_puck`
 - `ever_released`
 - the resolved per-report `reset_seed`
+- the simulator `seed` plus per-demo `simulator_seed` for simulator-backed runs
 - the resolved intervention kind and the leading selected text or patch mask
 - the per-attempt mask attached to each masked rollout entry
 - the dataset demo key and reference frame index when dataset mode is used
@@ -254,8 +251,7 @@ Useful selection flags:
 - `--stride` to match the reference-frame sampling used by the offline
   intervention collector
 - `--reference-step` to choose which kept frame supplies the mask
-- `--pickup-attempt-marker-threshold` to enable pickup-attempt markers at a
-  chosen `gripper_action` threshold; leave it unset to keep those markers off
+- `--seed` to make simulator-backed demo sampling reproducible
 
 If multiple demos are selected, the exporter writes one PNG / JSON / MP4 set per
 demo with a demo-key suffix while keeping the dataset order.
@@ -272,6 +268,7 @@ python benchmarks/go_vla_benchmark/scripts/export_openvla_online_intervention_re
   --summary-output benchmarks/go_vla_benchmark/data/interventions/online_task_report.json \
   --intervention-kind text \
   --simulator-demos 3 \
+  --seed 7 \
   --attempts 7 \
   --max-steps 200
 ```
@@ -279,6 +276,17 @@ python benchmarks/go_vla_benchmark/scripts/export_openvla_online_intervention_re
 Switch to patch masking by changing `--intervention-kind patch`. When multiple
 simulator demos are requested, the exporter writes one PNG / JSON / MP4 set per
 sampled scene with a simulator-demo suffix.
+
+Each per-demo simulator JSON now includes:
+
+- `seed`: the CLI base seed used to generate the simulator demo list
+- `simulator_seed`: the specific seed for that sampled simulator demo
+- `reset_seed`: the reset-time seed reused by the baseline and masked rollouts
+
+That means you can recreate one sampled scene directly with
+`--seed <simulator_seed> --simulator-demos 1`, then choose whether to export
+only the unmasked rollout with `--attempts 0` or export masked attempts from
+that exact same scene with `--attempts <N>`.
 
 ## Debugging Note
 

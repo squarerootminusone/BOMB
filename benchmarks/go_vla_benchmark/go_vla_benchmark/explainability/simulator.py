@@ -29,6 +29,7 @@ DEFAULT_SIMULATOR_MAX_STEPS = 200
 @dataclass
 class SimulatorOnlineDemoSpec:
     demo_key: str
+    simulator_seed: int
     instruction: str
     target_row: int
     target_col: int
@@ -38,8 +39,18 @@ class SimulatorOnlineDemoSpec:
     reference_image: np.ndarray
 
 
-def _build_instruction(*, demo_index: int, target_row: int, target_col: int, stone_color: str) -> str:
-    rng = np.random.RandomState(seed=int(demo_index))
+def _normalize_simulator_seed(seed: int) -> int:
+    return int(int(seed) % (2**32))
+
+
+def _demo_simulator_seed(*, base_seed: int, demo_index: int) -> int:
+    # Make each sampled simulator demo independently reproducible so the
+    # printed per-demo seed can be reused later with `--simulator-demos 1`.
+    return _normalize_simulator_seed(int(base_seed) + int(demo_index))
+
+
+def _build_instruction(*, seed: int, target_row: int, target_col: int, stone_color: str) -> str:
+    rng = np.random.RandomState(seed=_normalize_simulator_seed(seed))
     template = INSTRUCTION_TEMPLATES[int(rng.randint(len(INSTRUCTION_TEMPLATES)))]
     return format_instruction_template(template, color=stone_color, row=target_row, col=target_col)
 
@@ -121,7 +132,6 @@ def collect_simulator_online_demo_specs(
 
     from ..env_factory import create_benchmark_env
 
-    rng = np.random.RandomState(int(seed))
     env = create_benchmark_env(
         seed=int(seed),
         environment_name=environment_name,
@@ -137,8 +147,10 @@ def collect_simulator_online_demo_specs(
     try:
         specs: List[SimulatorOnlineDemoSpec] = []
         for demo_index in range(int(num_demos)):
+            simulator_seed = _demo_simulator_seed(base_seed=seed, demo_index=demo_index)
+            demo_rng = np.random.RandomState(simulator_seed)
             sampled_reset = _sample_reset_options(
-                rng=rng,
+                rng=demo_rng,
                 opening_moves_min=opening_moves_min,
                 opening_moves_max=opening_moves_max,
             )
@@ -160,8 +172,9 @@ def collect_simulator_online_demo_specs(
             specs.append(
                 SimulatorOnlineDemoSpec(
                     demo_key=_make_demo_key(demo_index),
+                    simulator_seed=int(simulator_seed),
                     instruction=_build_instruction(
-                        demo_index=demo_index,
+                        seed=simulator_seed,
                         target_row=int(target_row),
                         target_col=int(target_col),
                         stone_color=stone_color,

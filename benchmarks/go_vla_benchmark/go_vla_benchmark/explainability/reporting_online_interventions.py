@@ -874,18 +874,6 @@ def _draw_plot_panel(
                 alpha_mode=alpha_mode,
                 xy_offset=xy_offset,
             )
-        _draw_attempt_markers(
-            attempt_draw,
-            attempt=attempt,
-            plot_box=plot_box,
-            projection_min=projection_min,
-            projection_max=projection_max,
-            z_min=z_min,
-            z_max=z_max,
-            alpha=min(255, alpha + 36),
-            alpha_mode=alpha_mode,
-            xy_offset=xy_offset,
-        )
         image = Image.alpha_composite(image, attempt_layer)
     draw = ImageDraw.Draw(image, "RGBA")
     if show_aligned_start_marker:
@@ -1060,19 +1048,6 @@ def _draw_plot_content(
                 alpha_mode=alpha_mode,
                 xy_offset=xy_offset,
             )
-        _draw_attempt_markers(
-            attempt_draw,
-            attempt=attempt,
-            plot_box=plot_box,
-            projection_min=projection_min,
-            projection_max=projection_max,
-            z_min=z_min,
-            z_max=z_max,
-            alpha=min(255, alpha + 36),
-            alpha_mode=alpha_mode,
-            xy_offset=xy_offset,
-            pickup_attempt_marker_threshold=pickup_attempt_marker_threshold,
-        )
         image = Image.alpha_composite(image, attempt_layer)
     if show_aligned_start_marker:
         draw = ImageDraw.Draw(image, "RGBA")
@@ -1170,35 +1145,25 @@ def _draw_reference_markers(
     _draw_target_marker(draw, center=target_point)
 
 
-def _draw_event_legend_row(
+def _draw_reference_legend_row(
     draw: ImageDraw.ImageDraw,
     *,
     image: Image.Image,
     origin: tuple[int, int],
     font: ImageFont.ImageFont,
     include_aligned_start: bool,
-    include_pickup_attempt: bool,
 ) -> None:
     x, y = origin
-    items: list[tuple[str, str]] = []
-    if include_pickup_attempt:
-        items.append(("pickup_attempt", "Pickup Attempt"))
-    items.extend(
-        [
-            ("grasp_hold", "Grasped / Hold"),
-            ("release", "Release / Commit"),
-            ("source", "Source"),
-            ("target", "Target"),
-        ]
-    )
+    items: list[tuple[str, str]] = [
+        ("source", "Source"),
+        ("target", "Target"),
+    ]
     if include_aligned_start:
         items.append(("aligned_start", "Aligned Start"))
 
     for kind, label in items:
         center = (x + 14, y + 16)
-        if kind in {"pickup_attempt", "grasp_hold", "release"}:
-            _draw_legend_marker(draw, kind=kind, center=center)
-        elif kind == "source":
+        if kind == "source":
             _draw_circle_marker(
                 draw,
                 center=center,
@@ -1422,14 +1387,13 @@ def _export_online_intervention_report_png_paper_style_pil(
         phase_row_x += text_w + 90
 
     event_header_y = phase_row_y + 56
-    draw.text((legend_x, event_header_y), "Events", fill=MASK_LEGEND_HEADER, font=header_font)
-    _draw_event_legend_row(
+    draw.text((legend_x, event_header_y), "Reference", fill=MASK_LEGEND_HEADER, font=header_font)
+    _draw_reference_legend_row(
         draw,
         image=image,
         origin=(legend_x, event_header_y + 38),
         font=phase_font,
         include_aligned_start=bool(report.masked_attempts),
-        include_pickup_attempt=pickup_attempt_marker_threshold is not None,
     )
 
     _draw_attempt_legend(
@@ -1560,6 +1524,7 @@ def export_online_intervention_report_png(
         show_phase_change_markers: bool,
         pickup_attempt_marker_threshold: float | None,
     ) -> None:
+        del pickup_attempt_marker_threshold
         points_xy = _attempt_xy_points(attempt, xy_offset=xy_offset)
         if len(points_xy) >= 2:
             segments = np.stack([points_xy[:-1], points_xy[1:]], axis=1)
@@ -1623,46 +1588,6 @@ def export_online_intervention_report_png(
                     zorder=4,
                 )
 
-        pickup_attempts, grasped_points, releases = _marker_events(
-            attempt,
-            pickup_attempt_marker_threshold=pickup_attempt_marker_threshold,
-        )
-        for xyz, _step_idx in pickup_attempts:
-            xy = _offset_projected_xy(xyz, xy_offset=xy_offset)
-            ax.scatter(
-                [xy[0]],
-                [xy[1]],
-                s=58,
-                marker="o",
-                facecolors="white",
-                edgecolors=[_mpl_rgba(MARKER_OUTLINE, 0.95)],
-                linewidths=1.2,
-                zorder=5,
-            )
-        for xyz, _step_idx in grasped_points:
-            xy = _offset_projected_xy(xyz, xy_offset=xy_offset)
-            ax.scatter(
-                [xy[0]],
-                [xy[1]],
-                s=34,
-                marker="o",
-                c=[_mpl_rgba(MARKER_SOLID, 0.95)],
-                linewidths=0.0,
-                zorder=5,
-            )
-        for xyz, _step_idx in releases:
-            xy = _offset_projected_xy(xyz, xy_offset=xy_offset)
-            ax.scatter(
-                [xy[0]],
-                [xy[1]],
-                s=64,
-                marker="D",
-                facecolors="white",
-                edgecolors=[_mpl_rgba(RELEASE_MARKER_OUTLINE, 0.95)],
-                linewidths=1.3,
-                zorder=5,
-            )
-
     fig = plt.figure(figsize=(13.6, 8.4), dpi=220, facecolor="white")
     grid = fig.add_gridspec(2, 2, height_ratios=[4.2, 1.5], hspace=0.25, wspace=0.18)
     baseline_ax = fig.add_subplot(grid[0, 0])
@@ -1721,69 +1646,31 @@ def export_online_intervention_report_png(
         Line2D([0], [0], color=_mpl_rgba(color, 1.0), lw=3.0, label=label)
         for label, color in _legend_items()
     ]
-    event_handles: list[object] = []
-    if marker_threshold is not None:
-        event_handles.append(
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                linestyle="None",
-                markersize=7.0,
-                markerfacecolor="white",
-                markeredgecolor=_mpl_rgba(MARKER_OUTLINE, 0.95),
-                markeredgewidth=1.2,
-                label="Pickup Attempt",
-            )
-        )
-    event_handles.extend(
-        [
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                linestyle="None",
-                markersize=6.0,
-                markerfacecolor=_mpl_rgba(MARKER_SOLID, 0.95),
-                markeredgecolor=_mpl_rgba(MARKER_SOLID, 0.95),
-                label="Grasped / Hold",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="D",
-                linestyle="None",
-                markersize=7.0,
-                markerfacecolor="white",
-                markeredgecolor=_mpl_rgba(RELEASE_MARKER_OUTLINE, 0.95),
-                markeredgewidth=1.2,
-                label="Release / Commit",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="o",
-                linestyle="None",
-                markersize=7.0,
-                markerfacecolor="white",
-                markeredgecolor=_mpl_rgba((17, 24, 39), 1.0),
-                markeredgewidth=1.3,
-                label="Source",
-            ),
-            Line2D(
-                [0],
-                [0],
-                marker="X",
-                linestyle="None",
-                markersize=7.2,
-                markerfacecolor=_mpl_rgba((17, 24, 39), 1.0),
-                markeredgecolor=_mpl_rgba((17, 24, 39), 1.0),
-                label="Target",
-            ),
-        ]
-    )
+    reference_handles: list[object] = [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="None",
+            markersize=7.0,
+            markerfacecolor="white",
+            markeredgecolor=_mpl_rgba((17, 24, 39), 1.0),
+            markeredgewidth=1.3,
+            label="Source",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="X",
+            linestyle="None",
+            markersize=7.2,
+            markerfacecolor=_mpl_rgba((17, 24, 39), 1.0),
+            markeredgecolor=_mpl_rgba((17, 24, 39), 1.0),
+            label="Target",
+        ),
+    ]
     if report.masked_attempts:
-        event_handles.append(
+        reference_handles.append(
             Line2D(
                 [0],
                 [0],
@@ -1829,13 +1716,13 @@ def export_online_intervention_report_png(
     )
     legend_ax.add_artist(phase_legend)
 
-    event_legend = legend_ax.legend(
-        event_handles,
-        [handle.get_label() for handle in event_handles],
-        title="Events",
+    reference_legend = legend_ax.legend(
+        reference_handles,
+        [handle.get_label() for handle in reference_handles],
+        title="Reference",
         loc="upper left",
         bbox_to_anchor=(0.0, 0.60),
-        ncol=min(6, max(3, len(event_handles))),
+        ncol=min(6, max(3, len(reference_handles))),
         frameon=False,
         fontsize=10,
         title_fontsize=11,
@@ -1843,7 +1730,7 @@ def export_online_intervention_report_png(
         columnspacing=1.4,
         borderaxespad=0.0,
     )
-    legend_ax.add_artist(event_legend)
+    legend_ax.add_artist(reference_legend)
 
     attempt_legend = legend_ax.legend(
         attempt_handles,

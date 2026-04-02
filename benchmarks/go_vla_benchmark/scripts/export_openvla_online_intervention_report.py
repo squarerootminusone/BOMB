@@ -105,7 +105,7 @@ def parse_args() -> argparse.Namespace:
         "--pickup-attempt-marker-threshold",
         type=float,
         default=None,
-        help="optional gripper-action threshold for rendering pickup-attempt markers; disabled by default",
+        help="deprecated compatibility flag; online intervention PNGs no longer render event markers",
     )
     parser.add_argument("--camera-size", type=int, default=256)
     parser.add_argument("--opening-moves", type=int, default=0)
@@ -120,7 +120,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--mask-label", type=str, default=None, help="optional explicit text span to mask")
     parser.add_argument("--mask-index", type=int, default=None, help="optional explicit text mask candidate index")
-    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=7,
+        help="base seed for simulator-backed demo sampling; each sampled simulator demo is exported with its own reproducible derived seed",
+    )
     parser.add_argument("--robot", type=str, default="Panda")
     parser.add_argument("--gripper-types", type=str, default="default")
     parser.add_argument("--prompt-style", choices=["openvla", "openvla-v01"], default=None)
@@ -249,6 +254,7 @@ def main() -> None:
         report_summary_path: Path | None,
         report_video_path: Path,
         masked_attempt_video_paths: list[Path],
+        manifest_overrides: dict[str, object] | None = None,
         report_builder,
     ) -> dict[str, object]:
         report_output_png.parent.mkdir(parents=True, exist_ok=True)
@@ -299,6 +305,8 @@ def main() -> None:
             if args.pickup_attempt_marker_threshold is None
             else float(args.pickup_attempt_marker_threshold)
         )
+        if manifest_overrides:
+            manifest.update(manifest_overrides)
         if report_summary_path is not None:
             report_summary_path.parent.mkdir(parents=True, exist_ok=True)
             report_summary_path.write_text(json.dumps(manifest, indent=2))
@@ -380,6 +388,7 @@ def main() -> None:
                     report_summary_path=report_summary_path,
                     report_video_path=report_video_path,
                     masked_attempt_video_paths=masked_attempt_video_paths,
+                    manifest_overrides={"seed": int(args.seed)},
                     report_builder=lambda baseline_callback, masked_callbacks, demo_spec=demo_spec, selected_masks=selected_masks: collect_online_intervention_report(
                         policy=policy,
                         env_factory=env_factory,
@@ -395,6 +404,7 @@ def main() -> None:
                         reset_options=_spec_reset_options(demo_spec),
                         demo_key=demo_spec.demo_key,
                         reference_frame_index=demo_spec.reference_frame_index,
+                        simulator_seed=None if not hasattr(demo_spec, "simulator_seed") else int(demo_spec.simulator_seed),
                         baseline_frame_callback=baseline_callback,
                         masked_attempt_frame_callbacks=masked_callbacks,
                     ),
