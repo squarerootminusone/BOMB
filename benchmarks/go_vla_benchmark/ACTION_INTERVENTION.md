@@ -13,7 +13,10 @@ input perturbations over the same RLDS-aligned clips:
 - minimal counterfactual edits
 ## Inputs
 
-- an HDF5 Go dataset loaded through the existing RLDS-style clip adapter
+- either:
+  - an HDF5 Go dataset loaded through the existing RLDS-style clip adapter
+  - random successful simulator demos collected on the fly with
+    `--simulator-demos`
 - an OpenVLA checkpoint
 - the same prompt style and action de-normalization settings used in local explanations
 
@@ -30,10 +33,17 @@ Report export writes:
 - one JSON and one Markdown file per step
 - one intervention-panel PNG per step when patch occlusion or text masking is enabled
 
-Both collection and report export keep demos in the same order exposed by the
-source HDF5 file, so the `.npz`, report index, and per-demo folders stay easy
-to compare side by side. If you use `--top-k` during export, it keeps that
-subset in dataset order instead of re-sorting the report by score.
+Both collection and report export keep demos in a stable input order:
+
+- HDF5 runs keep the order exposed by the source dataset
+- simulator runs keep the successful simulator-sampling order
+
+That keeps the `.npz`, report index, and per-demo folders easy to compare side
+by side. If you use `--top-k` during export, it keeps that subset in input
+order instead of re-sorting the report by score.
+
+When collection runs from `--simulator-demos`, the trace embeds the selected
+clips directly, so the exporter does not need a dataset path later.
 
 ## Run Collection
 
@@ -66,18 +76,17 @@ Run only patch occlusion:
 ```bash
 conda run --no-capture-output -n main \
   python benchmarks/go_vla_benchmark/scripts/collect_openvla_intervention_tests.py \
-  --dataset /root/dsait4125/benchmarks/go_vla_benchmark/data/source_go.hdf5 \
   --checkpoint /root/16-18-14/checkpoints/best-merged \
-  --trace-output /root/dsait4125/benchmarks/go_vla_benchmark/data/interventions/source_go_interventions_patches.npz \
-  --summary-output /root/dsait4125/benchmarks/go_vla_benchmark/data/interventions/source_go_interventions_patches.json \
+  --trace-output /root/dsait4125/benchmarks/go_vla_benchmark/data/interventions/simulator_interventions_patches.npz \
+  --summary-output /root/dsait4125/benchmarks/go_vla_benchmark/data/interventions/simulator_interventions_patches.json \
   --runs patch-occlusion \
-  --num-demos 5 \
+  --simulator-demos 5 \
   --stride 4 \
   --device cuda:0 \
   --attn-implementation eager
 
 python benchmarks/go_vla_benchmark/scripts/export_openvla_intervention_report.py \
-  --trace-input benchmarks/go_vla_benchmark/data/interventions/source_go_interventions_patches.npz \
+  --trace-input benchmarks/go_vla_benchmark/data/interventions/simulator_interventions_patches.npz \
   --output-dir benchmarks/go_vla_benchmark/data/interventions/report_patches
 ```
 
@@ -178,6 +187,8 @@ for each RLDS-selected frame:
   is intentionally transparent: every cumulative edit is stored in the trace.
 - `--runs` lets you execute only the expensive part you need.
 - All traces stay self-contained, so the report exporter does not rerun the model.
+- Simulator-backed traces are also self-contained at the clip level, so report
+  export works without `--dataset`.
 
 ## Online Task-Level Report
 

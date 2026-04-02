@@ -27,6 +27,14 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     resolve_repo_relative_path,
     save_causal_trace_file,
 )
+from go_vla_benchmark.explainability.simulator import (  # noqa: E402
+    DEFAULT_SIMULATOR_CAMERA_SIZE,
+    DEFAULT_SIMULATOR_ENVIRONMENT,
+    DEFAULT_SIMULATOR_MAX_ATTEMPTS_PER_DEMO,
+    DEFAULT_SIMULATOR_OPENING_MAX,
+    DEFAULT_SIMULATOR_OPENING_MIN,
+    collect_simulator_episode_clips,
+)
 
 
 def _print_runtime_diagnostics(args: argparse.Namespace, clips, model_adapter) -> None:
@@ -66,7 +74,18 @@ def _print_runtime_diagnostics(args: argparse.Namespace, clips, model_adapter) -
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", required=True, type=str, help="Go benchmark HDF5 dataset")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="optional Go benchmark HDF5 dataset; omit with --simulator-demos to sample random simulator clips",
+    )
+    parser.add_argument(
+        "--simulator-demos",
+        type=int,
+        default=0,
+        help="number of random successful simulator demos to collect when no --dataset is provided",
+    )
     parser.add_argument("--checkpoint", required=True, type=str, help="OpenVLA checkpoint path or HF id")
     parser.add_argument("--trace-output", required=True, type=str, help="output .npz trace path")
     parser.add_argument("--summary-output", type=str, default=None, help="optional summary JSON path")
@@ -76,10 +95,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--unnorm-key", type=str, default=None, help="dataset statistics key for de-normalizing actions")
     parser.add_argument("--action-dim", type=int, default=None, help="fallback action dimension when norm stats are absent")
     parser.add_argument("--start", type=int, default=0, help="start demo index in dataset order")
-    parser.add_argument("--num-demos", type=int, default=0, help="number of demos to process; <= 0 means all")
-    parser.add_argument("--demos", type=str, default=None, help="optional comma-separated demo keys")
+    parser.add_argument("--num-demos", type=int, default=0, help="number of dataset demos to process; <= 0 means all")
+    parser.add_argument("--demos", type=str, default=None, help="optional comma-separated dataset demo keys")
     parser.add_argument("--stride", type=int, default=1, help="extra frame stride after RLDS-style subsampling/filtering")
     parser.add_argument("--max-steps", type=int, default=0, help="max timesteps per demo after applying stride")
+    parser.add_argument("--seed", type=int, default=7, help="random seed for simulator-backed demo generation")
+    parser.add_argument("--environment-name", type=str, default=DEFAULT_SIMULATOR_ENVIRONMENT)
+    parser.add_argument("--camera-size", type=int, default=DEFAULT_SIMULATOR_CAMERA_SIZE)
+    parser.add_argument("--robot", type=str, default="Panda")
+    parser.add_argument("--gripper-types", type=str, default="default")
+    parser.add_argument("--simulator-opening-min", type=int, default=DEFAULT_SIMULATOR_OPENING_MIN)
+    parser.add_argument("--simulator-opening-max", type=int, default=DEFAULT_SIMULATOR_OPENING_MAX)
+    parser.add_argument(
+        "--simulator-max-attempts-per-demo",
+        type=int,
+        default=DEFAULT_SIMULATOR_MAX_ATTEMPTS_PER_DEMO,
+    )
     parser.add_argument("--attention-layers", type=int, default=4, help="number of last decoder layers to average")
     parser.add_argument(
         "--attn-implementation",
@@ -122,6 +153,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _validate_source_args(args: argparse.Namespace) -> None:
+    has_dataset = args.dataset is not None
+    has_simulator = int(args.simulator_demos) > 0
+    if args.intervention_match is None:
+        if has_dataset == has_simulator:
+            raise ValueError("pass exactly one of --dataset or --simulator-demos")
+        if has_simulator and (args.demos is not None or args.start != 0 or args.num_demos != 0):
+            raise ValueError("--simulator-demos does not use --demos, --start, or --num-demos")
+        return
+
+    if args.corruption_index is not None:
+        raise ValueError("--corruption-index cannot be combined with --intervention-match")
+    if has_simulator:
+        raise ValueError("--intervention-match reuses demos from the intervention trace; do not pass --simulator-demos")
+    if args.demos is not None or args.start != 0 or args.num_demos != 0 or args.stride != 1 or args.max_steps != 0:
+        raise ValueError(
+            "--intervention-match uses the demo and frame selection stored in the intervention trace; "
+            "do not pass --demos, --start, --num-demos, --stride, or --max-steps"
+        )
+
+
 def _auto_intervention_trace_candidates(dataset_path: Path, corruption_type: str) -> list[Path]:
     intervention_dir = REPO_ROOT / "benchmarks" / "go_vla_benchmark" / "data" / "interventions"
     dataset_stem = dataset_path.stem
@@ -135,7 +187,7 @@ def _auto_intervention_trace_candidates(dataset_path: Path, corruption_type: str
 
 def _resolve_intervention_match_trace(
     requested: str,
-    dataset_path: Path,
+    dataset_path: Optional[Path],
     corruption_type: str,
 ) -> Path:
     if requested != "auto":
@@ -143,6 +195,11 @@ def _resolve_intervention_match_trace(
         if not trace_path.is_file():
             raise FileNotFoundError(f"intervention trace not found: {trace_path}")
         return trace_path
+
+    if dataset_path is None:
+        raise ValueError(
+            "--intervention-match without an explicit path requires --dataset so the matching trace stem can be inferred"
+        )
 
     candidates = _auto_intervention_trace_candidates(dataset_path=dataset_path, corruption_type=corruption_type)
     for candidate in candidates:
@@ -158,7 +215,7 @@ def _resolve_intervention_match_trace(
 
 
 def _load_intervention_matched_inputs(
-    dataset_path: Path,
+    dataset_path: Optional[Path],
     dataset_adapter,
     corruption_type: str,
     intervention_match: str,
@@ -169,14 +226,21 @@ def _load_intervention_matched_inputs(
         corruption_type=corruption_type,
     )
     intervention_bundle = load_intervention_trace_file(trace_path)
-    clips = dataset_adapter.load_episode_clips(
-        dataset_path=dataset_path,
-        demos=",".join(intervention_bundle.demo_keys),
-        start=0,
-        num_demos=0,
-        stride=1,
-        max_steps=0,
-    )
+    if intervention_bundle.embedded_clips_by_key is not None and dataset_path is None:
+        clips = [intervention_bundle.embedded_clips_by_key[demo_key] for demo_key in intervention_bundle.demo_keys]
+    else:
+        if dataset_path is None or dataset_adapter is None:
+            raise ValueError(
+                "the requested intervention trace does not embed clips; pass --dataset or use a simulator-backed trace"
+            )
+        clips = dataset_adapter.load_episode_clips(
+            dataset_path=dataset_path,
+            demos=",".join(intervention_bundle.demo_keys),
+            start=0,
+            num_demos=0,
+            stride=1,
+            max_steps=0,
+        )
     adjusted_clips, corruption_indices_by_key = match_intervention_trace_to_clips(
         clips=clips,
         trace_bundle=intervention_bundle,
@@ -185,38 +249,42 @@ def _load_intervention_matched_inputs(
     return trace_path, adjusted_clips, corruption_indices_by_key
 
 
-def _validate_intervention_match_args(args: argparse.Namespace) -> None:
-    if args.intervention_match is None:
-        return
-    if args.corruption_index is not None:
-        raise ValueError("--corruption-index cannot be combined with --intervention-match")
-    if args.demos is not None or args.start != 0 or args.num_demos != 0 or args.stride != 1 or args.max_steps != 0:
-        raise ValueError(
-            "--intervention-match uses the demo and frame selection stored in the intervention trace; "
-            "do not pass --demos, --start, --num-demos, --stride, or --max-steps"
-        )
-
-
 def main() -> None:
     args = parse_args()
-    _validate_intervention_match_args(args)
+    _validate_source_args(args)
 
-    dataset_path = resolve_dataset_path(args.dataset, repo_root=REPO_ROOT)
     trace_output_path = resolve_optional_path(args.trace_output, repo_root=REPO_ROOT)
     summary_output_path = resolve_optional_path(args.summary_output, repo_root=REPO_ROOT)
+    dataset_path = resolve_dataset_path(args.dataset, repo_root=REPO_ROOT) if args.dataset else None
 
-    dataset_adapter = DATASET_ADAPTERS[args.dataset_adapter]()
+    dataset_adapter = DATASET_ADAPTERS[args.dataset_adapter]() if dataset_path is not None else None
     intervention_match_trace_path: Optional[Path] = None
     corruption_indices_by_key = None
     if args.intervention_match is None:
-        clips = dataset_adapter.load_episode_clips(
-            dataset_path=dataset_path,
-            demos=args.demos,
-            start=args.start,
-            num_demos=args.num_demos,
-            stride=args.stride,
-            max_steps=args.max_steps,
-        )
+        if dataset_path is not None:
+            assert dataset_adapter is not None
+            clips = dataset_adapter.load_episode_clips(
+                dataset_path=dataset_path,
+                demos=args.demos,
+                start=args.start,
+                num_demos=args.num_demos,
+                stride=args.stride,
+                max_steps=args.max_steps,
+            )
+        else:
+            clips = collect_simulator_episode_clips(
+                num_demos=args.simulator_demos,
+                seed=args.seed,
+                stride=args.stride,
+                max_steps=args.max_steps,
+                environment_name=args.environment_name,
+                camera_size=args.camera_size,
+                opening_moves_min=args.simulator_opening_min,
+                opening_moves_max=args.simulator_opening_max,
+                max_attempts_per_demo=args.simulator_max_attempts_per_demo,
+                robot=args.robot,
+                gripper_types=args.gripper_types,
+            )
     else:
         intervention_match_trace_path, clips, corruption_indices_by_key = _load_intervention_matched_inputs(
             dataset_path=dataset_path,
@@ -225,7 +293,7 @@ def main() -> None:
             intervention_match=args.intervention_match,
         )
     if not clips:
-        raise RuntimeError("no demos selected from dataset")
+        raise RuntimeError("no demos available from the selected input source")
 
     model_adapter = CAUSAL_MODEL_ADAPTERS[args.model_adapter](
         checkpoint=args.checkpoint,
@@ -255,15 +323,16 @@ def main() -> None:
         traces=traces,
         checkpoint=args.checkpoint,
         prompt_style=model_adapter.prompt_style,
-        dataset_adapter=args.dataset_adapter,
+        dataset_adapter=args.dataset_adapter if dataset_path is not None else None,
         model_adapter=args.model_adapter,
+        embed_clips=dataset_path is None,
     )
 
     summary = causal_trace_manifest(
         dataset_path=dataset_path,
         checkpoint=args.checkpoint,
         prompt_style=model_adapter.prompt_style,
-        dataset_adapter=args.dataset_adapter,
+        dataset_adapter=args.dataset_adapter if dataset_path is not None else None,
         model_adapter=args.model_adapter,
         clips=clips,
         traces=traces,
@@ -275,6 +344,8 @@ def main() -> None:
         summary["intervention_match_trace_path"] = str(intervention_match_trace_path)
         summary["corruption_selection"] = "intervention-match"
     summary["per_cross_attention"] = bool(args.per_cross_attention)
+    summary["clip_source"] = "dataset" if dataset_path is not None else "simulator"
+    summary["embedded_clips"] = bool(dataset_path is None)
 
     if summary_output_path is not None:
         summary_output_path.parent.mkdir(parents=True, exist_ok=True)

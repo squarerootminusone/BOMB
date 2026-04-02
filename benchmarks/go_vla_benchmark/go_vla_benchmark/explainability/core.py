@@ -254,6 +254,40 @@ def _to_object_array(values: Sequence[object]) -> np.ndarray:
     return np.asarray(list(values), dtype=object)
 
 
+def serialize_embedded_episode_clips(clips: Sequence[EpisodeClip]) -> Dict[str, np.ndarray]:
+    return {
+        "embedded_clip_demo_keys": _to_object_array(clip.demo_key for clip in clips),
+        "embedded_clip_instructions": _to_object_array(clip.instruction for clip in clips),
+        "embedded_clip_images": _to_object_array(np.asarray(clip.images, dtype=np.uint8) for clip in clips),
+        "embedded_clip_gt_actions": _to_object_array(np.asarray(clip.gt_actions, dtype=np.float32) for clip in clips),
+        "embedded_clip_frame_indices": _to_object_array(
+            np.asarray(clip.frame_indices, dtype=np.int32) for clip in clips
+        ),
+    }
+
+
+def load_embedded_episode_clips(data: np.lib.npyio.NpzFile) -> Optional[Dict[str, EpisodeClip]]:
+    if "embedded_clip_demo_keys" not in data:
+        return None
+
+    demo_keys = [str(item) for item in data["embedded_clip_demo_keys"].tolist()]
+    instructions = data["embedded_clip_instructions"].tolist()
+    images = data["embedded_clip_images"].tolist()
+    gt_actions = data["embedded_clip_gt_actions"].tolist()
+    frame_indices = data["embedded_clip_frame_indices"].tolist()
+
+    clips: Dict[str, EpisodeClip] = {}
+    for idx, demo_key in enumerate(demo_keys):
+        clips[demo_key] = EpisodeClip(
+            demo_key=demo_key,
+            instruction=str(instructions[idx]),
+            images=np.asarray(images[idx], dtype=np.uint8),
+            gt_actions=np.asarray(gt_actions[idx], dtype=np.float32),
+            frame_indices=np.asarray(frame_indices[idx], dtype=np.int32),
+        )
+    return clips
+
+
 def save_trace_file(
     trace_path: Path,
     dataset_path: Path,

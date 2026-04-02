@@ -32,6 +32,8 @@ The online report uses the real simulator and online inference. It supports:
 
 - text masking
 - patch masking
+- dataset-driven report export from recorded Go demos
+- simulator-driven random report export with `--simulator-demos`
 
 The report layout stays paper-style:
 
@@ -101,6 +103,24 @@ Mask selection is dataset-driven as well:
 This keeps the online and offline intervention paths anchored to the same
 recorded demo content instead of relying on a hand-written target phrase only.
 
+## Simulator-Driven Random Runs
+
+You can also skip HDF5 input entirely and ask the exporter to sample fresh
+simulator scenes with `--simulator-demos`.
+
+For each sampled simulator demo it:
+
+- resets a fresh random Go scene directly in the simulator
+- samples a random opening length in the configured simulator opening range
+- samples a random stone color
+- lets the environment choose a legal target move
+- uses the reset frame itself as the reference frame for ranking text or patch
+  masks
+- reuses that exact reset state for the baseline and masked rollouts
+
+This is the easiest way to run text or patch masking online when you do not
+have an HDF5 dataset on hand.
+
 Reset-time randomness is also anchored per report now:
 
 - different demos no longer restart from the same reset-1 RNG state when they
@@ -124,8 +144,8 @@ The rollout format did not need a structural rewrite. It already records
 
 The renderer now overlays three marker types on both panels:
 
-- hollow markers where the gripper is closing but the stone is not grasped yet:
-  pickup attempt
+- hollow markers where the gripper is closing very aggressively but the stone is
+  not grasped yet: pickup attempt
 - filled markers where `stone_grasped=True`: actual hold / transport
 - release markers where grasp changes `True -> False` or
   `move_committed=True`: release / commit
@@ -152,21 +172,29 @@ The JSON manifest includes:
 
 ## Video
 
-The unmasked rollout writes an MP4 by default from the same export command.
+The export command now writes an MP4 for every rollout attempt, not just the
+unmasked baseline.
 
-- default video path: `<output-png stem>_baseline.mp4`
-- override with `--baseline-video-output`
+- default baseline path: `<output-png stem>_baseline.mp4`
+- default masked-attempt paths: `<output-png stem>_masked_attempt_01.mp4`,
+  `<output-png stem>_masked_attempt_02.mp4`, and so on
+- `--baseline-video-output` still sets the baseline path; masked-attempt files
+  are written beside it using the same stem
 - control playback speed with `--video-fps`
 - each MP4 frame overlays a bright tracking dot on the arm point used for the
   trajectory plot
+- the JSON manifest now includes an `output_videos` list with every saved MP4
 
-The rollout collector already has a frame callback hook, so baseline frames are
-streamed directly to the video writer.
+The rollout collector already had a frame callback hook for the baseline, and
+the masked attempts now use the same callback path so every rollout is streamed
+directly to disk during export.
 
 ## Manual Run
 
 Manual mode still works when you want to specify the target directly and mask a
-text span by label or index:
+text span by label or index. Manual patch masking now works as well: the script
+first grabs the reset-frame image from the simulator, ranks patch masks on that
+frame, and then reruns the rollout with the selected mask.
 
 ```bash
 python benchmarks/go_vla_benchmark/scripts/export_openvla_online_intervention_report.py \
@@ -218,6 +246,26 @@ Useful selection flags:
 
 If multiple demos are selected, the exporter writes one PNG / JSON / MP4 set per
 demo with a demo-key suffix while keeping the dataset order.
+
+## Simulator-Driven Run
+
+If you just want random simulator scenes instead of dataset-derived resets, use
+`--simulator-demos`:
+
+```bash
+python benchmarks/go_vla_benchmark/scripts/export_openvla_online_intervention_report.py \
+  --checkpoint /abs/path/to/openvla-checkpoint \
+  --output-png benchmarks/go_vla_benchmark/data/interventions/online_task_report.png \
+  --summary-output benchmarks/go_vla_benchmark/data/interventions/online_task_report.json \
+  --intervention-kind text \
+  --simulator-demos 3 \
+  --attempts 7 \
+  --max-steps 200
+```
+
+Switch to patch masking by changing `--intervention-kind patch`. When multiple
+simulator demos are requested, the exporter writes one PNG / JSON / MP4 set per
+sampled scene with a simulator-demo suffix.
 
 ## Debugging Note
 

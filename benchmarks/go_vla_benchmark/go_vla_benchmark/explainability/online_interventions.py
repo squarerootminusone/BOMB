@@ -764,6 +764,7 @@ def collect_online_intervention_report(
     demo_key: Optional[str] = None,
     reference_frame_index: Optional[int] = None,
     baseline_frame_callback: Optional[Callable[[np.ndarray, int], None]] = None,
+    masked_attempt_frame_callbacks: Optional[Sequence[Optional[Callable[[np.ndarray, int], None]]]] = None,
 ) -> OnlineInterventionReport:
     env = env_factory()
     try:
@@ -794,6 +795,7 @@ def collect_online_intervention_report(
             if masked_attempt_masks is not None
             else [mask for _ in range(max(0, int(masked_attempts)))]
         )
+        attempt_frame_callbacks = list(masked_attempt_frame_callbacks or [])
         masked_runs = [
             _rollout_attempt(
                 env=env,
@@ -810,7 +812,7 @@ def collect_online_intervention_report(
                     else f"Mask Attempt {attempt_idx + 1}"
                 ),
                 reset_options=resolved_reset_options,
-                frame_callback=None,
+                frame_callback=attempt_frame_callbacks[attempt_idx] if attempt_idx < len(attempt_frame_callbacks) else None,
             )
             for attempt_idx, attempt_mask in enumerate(attempt_masks)
         ]
@@ -851,6 +853,7 @@ def collect_online_text_mask_report(
     mask_index: Optional[int] = None,
     mask_label: Optional[str] = None,
     baseline_frame_callback: Optional[Callable[[np.ndarray, int], None]] = None,
+    masked_attempt_frame_callbacks: Optional[Sequence[Optional[Callable[[np.ndarray, int], None]]]] = None,
 ) -> OnlineInterventionReport:
     resolved_mask = policy.resolve_text_mask_candidate(
         instruction,
@@ -873,6 +876,7 @@ def collect_online_text_mask_report(
         intervention_kind="text",
         mask=resolved_mask,
         baseline_frame_callback=baseline_frame_callback,
+        masked_attempt_frame_callbacks=masked_attempt_frame_callbacks,
     )
 
 

@@ -8,11 +8,18 @@ from typing import Dict, List, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 
-from .core import EpisodeClip, LocalExplanationStep, _to_object_array, compute_episode_scores
+from .core import (
+    EpisodeClip,
+    LocalExplanationStep,
+    _to_object_array,
+    compute_episode_scores,
+    load_embedded_episode_clips,
+    serialize_embedded_episode_clips,
+)
 
 
 INTERVENTION_TRACE_FORMAT = "openvla_intervention_tests_v1"
-INTERVENTION_SCHEMA_VERSION = 2
+INTERVENTION_SCHEMA_VERSION = 3
 
 
 @dataclass
@@ -85,7 +92,7 @@ class EpisodeInterventionTrace:
 
 @dataclass
 class InterventionTraceBundle:
-    dataset_path: Path
+    dataset_path: Optional[Path]
     checkpoint: Optional[str]
     prompt_style: Optional[str]
     dataset_adapter: Optional[str]
@@ -95,6 +102,7 @@ class InterventionTraceBundle:
     traces: Dict[str, EpisodeInterventionTrace]
     frame_indices_by_key: Dict[str, np.ndarray]
     demo_keys: List[str]
+    embedded_clips_by_key: Optional[Dict[str, EpisodeClip]] = None
 
 
 class InterventionModelAdapter(Protocol):
@@ -373,21 +381,21 @@ def _step_from_dict(payload: Dict[str, object]) -> InterventionStepTrace:
 
 def save_intervention_trace_file(
     trace_path: Path,
-    dataset_path: Path,
+    dataset_path: Optional[Path],
     clips: Sequence[EpisodeClip],
     traces: Sequence[EpisodeInterventionTrace],
     checkpoint: Optional[str],
     prompt_style: Optional[str],
     dataset_adapter: Optional[str],
     model_adapter: Optional[str],
+    embed_clips: bool = False,
 ) -> None:
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     clip_by_key = {clip.demo_key: clip for clip in clips}
-    np.savez_compressed(
-        trace_path,
+    payload = dict(
         trace_format=INTERVENTION_TRACE_FORMAT,
         schema_version=np.int32(INTERVENTION_SCHEMA_VERSION),
-        dataset_path=str(dataset_path),
+        dataset_path="" if dataset_path is None else str(dataset_path),
         checkpoint="" if checkpoint is None else checkpoint,
         prompt_style="" if prompt_style is None else prompt_style,
         dataset_adapter="" if dataset_adapter is None else dataset_adapter,
@@ -401,6 +409,9 @@ def save_intervention_trace_file(
         score=np.asarray([trace.score for trace in traces], dtype=np.float32),
         steps=_to_object_array([_step_to_dict(step) for step in trace.steps] for trace in traces),
     )
+    if embed_clips:
+        payload.update(serialize_embedded_episode_clips(clips))
+    np.savez_compressed(trace_path, **payload)
 
 
 def load_intervention_trace_file(trace_path: Path) -> InterventionTraceBundle:
@@ -415,6 +426,7 @@ def load_intervention_trace_file(trace_path: Path) -> InterventionTraceBundle:
         score = np.asarray(data["score"], dtype=np.float32)
         frame_indices = data["frame_indices"].tolist()
         steps = data["steps"].tolist()
+        embedded_clips_by_key = load_embedded_episode_clips(data)
 
         traces: Dict[str, EpisodeInterventionTrace] = {}
         frame_indices_by_key: Dict[str, np.ndarray] = {}
@@ -432,8 +444,9 @@ def load_intervention_trace_file(trace_path: Path) -> InterventionTraceBundle:
 
         trace_format = _optional_scalar(data, "trace_format") or INTERVENTION_TRACE_FORMAT
         schema_version = int(np.asarray(data["schema_version"]).item()) if "schema_version" in data else 1
+        dataset_path_str = _optional_scalar(data, "dataset_path")
         return InterventionTraceBundle(
-            dataset_path=Path(str(data["dataset_path"].tolist())).expanduser(),
+            dataset_path=None if dataset_path_str is None else Path(dataset_path_str).expanduser(),
             checkpoint=_optional_scalar(data, "checkpoint"),
             prompt_style=_optional_scalar(data, "prompt_style"),
             dataset_adapter=_optional_scalar(data, "dataset_adapter"),
@@ -443,6 +456,7 @@ def load_intervention_trace_file(trace_path: Path) -> InterventionTraceBundle:
             traces=traces,
             frame_indices_by_key=frame_indices_by_key,
             demo_keys=demo_keys,
+            embedded_clips_by_key=embedded_clips_by_key,
         )
 
 
@@ -479,7 +493,7 @@ def match_intervention_trace_to_clips(
 
     missing_demo_keys = [demo_key for demo_key in trace_bundle.demo_keys if demo_key not in clip_by_key]
     if missing_demo_keys:
-        raise ValueError(f"requested demos missing from dataset clips: {missing_demo_keys}")
+        raise ValueError(f"requested demos missing from input clips: {missing_demo_keys}")
 
     for demo_key in trace_bundle.demo_keys:
         clip = clip_by_key[demo_key]
@@ -507,7 +521,7 @@ def match_intervention_trace_to_clips(
             missing_frame_idx = int(exc.args[0])
             raise RuntimeError(
                 f"frame index {missing_frame_idx} from intervention trace for {demo_key} "
-                "was not found in the dataset clip selection"
+                "was not found in the selected input clips"
             ) from exc
 
         adjusted_clips.append(
@@ -528,7 +542,7 @@ def match_intervention_trace_to_clips(
 
 
 def intervention_trace_manifest(
-    dataset_path: Path,
+    dataset_path: Optional[Path],
     checkpoint: Optional[str],
     prompt_style: Optional[str],
     dataset_adapter: Optional[str],
@@ -567,7 +581,7 @@ def intervention_trace_manifest(
     return {
         "trace_format": INTERVENTION_TRACE_FORMAT,
         "schema_version": INTERVENTION_SCHEMA_VERSION,
-        "dataset_path": str(dataset_path),
+        "dataset_path": None if dataset_path is None else str(dataset_path),
         "checkpoint": checkpoint,
         "prompt_style": prompt_style,
         "dataset_adapter": dataset_adapter,

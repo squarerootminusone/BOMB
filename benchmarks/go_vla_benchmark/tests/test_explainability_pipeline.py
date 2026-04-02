@@ -29,6 +29,8 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     InterventionScan,
     InterventionStepTrace,
     InterventionTraceBundle,
+    OnlineInterventionAttempt,
+    OnlineInterventionStep,
     PatchMaskCandidateSpec,
     collect_episode_traces,
     causal_trace_manifest,
@@ -59,6 +61,7 @@ from go_vla_benchmark.explainability.reporting_causal import (  # noqa: E402
     _normalize_restoration_scores,
 )
 from go_vla_benchmark.explainability.reporting_online_interventions import (  # noqa: E402
+    _marker_events,
     _height_alpha,
     _masked_attempt_xy_offsets,
     _time_alpha,
@@ -927,7 +930,10 @@ class ExplainabilityPipelineTest(unittest.TestCase):
 
             bundle = load_intervention_trace_file(trace_path)
             self.assertEqual(bundle.trace_format, "openvla_intervention_tests_v1")
-            self.assertEqual(bundle.traces["demo_0"].steps[0].text_masking.top_candidates[0].label, "stone")
+            self.assertEqual(
+                bundle.traces["demo_0"].steps[0].text_masking.top_candidates[0].label,
+                "row 3, column 4",
+            )
             np.testing.assert_array_equal(
                 bundle.traces["demo_0"].steps[0].baseline_target_token_bin_indices,
                 np.asarray([101, 102, 103], dtype=np.int64),
@@ -944,6 +950,56 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             )
             self.assertEqual(manifest["trace_format"], "openvla_intervention_tests_v1")
             self.assertTrue(manifest["episodes"][0]["has_counterfactual"])
+
+    def test_intervention_trace_roundtrip_with_embedded_clips(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            dataset_path = tmp_path / "source_go.hdf5"
+            trace_path = tmp_path / "intervention_trace_embedded.npz"
+            self._write_dataset(dataset_path)
+
+            clips = GoHDF5DatasetAdapter().load_episode_clips(
+                dataset_path=dataset_path,
+                demos=None,
+                start=0,
+                num_demos=0,
+                stride=1,
+                max_steps=0,
+            )
+            traces = collect_episode_intervention_traces(clips=clips, model_adapter=_FakeInterventionAdapter())
+
+            save_intervention_trace_file(
+                trace_path=trace_path,
+                dataset_path=None,
+                clips=clips,
+                traces=traces,
+                checkpoint="/tmp/fake-openvla",
+                prompt_style="openvla",
+                dataset_adapter=None,
+                model_adapter="openvla",
+                embed_clips=True,
+            )
+
+            bundle = load_intervention_trace_file(trace_path)
+            self.assertIsNone(bundle.dataset_path)
+            self.assertIsNotNone(bundle.embedded_clips_by_key)
+            assert bundle.embedded_clips_by_key is not None
+            embedded_clip = bundle.embedded_clips_by_key["demo_0"]
+            self.assertEqual(embedded_clip.instruction, clips[0].instruction)
+            np.testing.assert_array_equal(embedded_clip.images, clips[0].images)
+            np.testing.assert_array_equal(embedded_clip.gt_actions, clips[0].gt_actions)
+            np.testing.assert_array_equal(embedded_clip.frame_indices, clips[0].frame_indices)
+
+            manifest = intervention_trace_manifest(
+                dataset_path=None,
+                checkpoint="/tmp/fake-openvla",
+                prompt_style="openvla",
+                dataset_adapter=None,
+                model_adapter="openvla",
+                clips=clips,
+                traces=traces,
+            )
+            self.assertIsNone(manifest["dataset_path"])
 
     def test_export_intervention_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -975,7 +1031,7 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             payload = json.loads(step_json.read_text())
             self.assertTrue(payload["counterfactual_success"])
             self.assertEqual(payload["patch_occlusion"]["top_candidates"][0]["label"], "patch (0, 0)")
-            self.assertEqual(payload["text_masking"]["top_candidates"][0]["label"], "stone")
+            self.assertEqual(payload["text_masking"]["top_candidates"][0]["label"], "row 3, column 4")
             self.assertIn("masked_query", payload["text_masking"]["top_candidates"][0])
             self.assertIn("Original query:", step_md.read_text())
             self.assertEqual(payload["counterfactual_edits"][1]["predicted_token_ids"], [41, 42, 43])
@@ -1281,6 +1337,238 @@ class ExplainabilityPipelineTest(unittest.TestCase):
                 _height_alpha(0.90, z_min=0.80, z_max=0.95, alpha=240),
                 _time_alpha(1, step_count=5, alpha=240),
             )
+
+    def test_collect_online_report_can_capture_masked_attempt_frames(self) -> None:
+        scenarios = [
+            {
+                "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                "initial": {
+                    "eef_xyz": np.asarray([-0.18, -0.10, 0.95], dtype=np.float32),
+                    "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    "stone_grasped": False,
+                    "move_committed": False,
+                },
+                "steps": [
+                    {
+                        "eef_xyz": np.asarray([0.00, -0.11, 0.90], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": True,
+                        "done": True,
+                    },
+                ],
+            },
+            {
+                "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                "initial": {
+                    "eef_xyz": np.asarray([-0.18, -0.10, 0.95], dtype=np.float32),
+                    "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    "stone_grasped": False,
+                    "move_committed": False,
+                },
+                "steps": [
+                    {
+                        "eef_xyz": np.asarray([0.02, -0.12, 0.87], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.18, 0.11, 0.84], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.18, 0.11, 0.82], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": True,
+                        "done": True,
+                    },
+                ],
+            },
+            {
+                "target_xyz": np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                "source_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                "initial": {
+                    "eef_xyz": np.asarray([-0.18, -0.10, 0.95], dtype=np.float32),
+                    "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    "stone_grasped": False,
+                    "move_committed": False,
+                },
+                "steps": [
+                    {
+                        "eef_xyz": np.asarray([-0.02, -0.11, 0.90], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.01, -0.11, 0.86], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": False,
+                        "done": False,
+                    },
+                    {
+                        "eef_xyz": np.asarray([0.17, 0.10, 0.84], dtype=np.float32),
+                        "stone_xyz": np.asarray([0.17, 0.10, 0.82], dtype=np.float32),
+                        "stone_grasped": False,
+                        "move_committed": True,
+                        "done": True,
+                    },
+                ],
+            },
+        ]
+        captured_baseline_frames: list[tuple[int, np.ndarray]] = []
+        captured_masked_frames: list[list[tuple[int, np.ndarray]]] = [[], []]
+
+        report = collect_online_intervention_report(
+            policy=_FakeOnlinePolicy(),
+            env_factory=lambda: _FakeOnlineEnv(scenarios=scenarios),
+            instruction="Place a black stone on the Go board at row 3, column 4.",
+            target_row=3,
+            target_col=4,
+            max_steps=3,
+            intervention_kind="text",
+            masked_attempt_masks=[
+                TextMaskCandidateSpec(
+                    index=0,
+                    label="row 3, column 4",
+                    prompt_token_positions=np.asarray([3, 4], dtype=np.int64),
+                    task_char_start=32,
+                    task_char_end=47,
+                ),
+                TextMaskCandidateSpec(
+                    index=1,
+                    label="go board",
+                    prompt_token_positions=np.asarray([4, 5], dtype=np.int64),
+                    task_char_start=24,
+                    task_char_end=32,
+                ),
+            ],
+            baseline_frame_callback=lambda frame, timestep: captured_baseline_frames.append(
+                (int(timestep), np.asarray(frame, dtype=np.uint8))
+            ),
+            masked_attempt_frame_callbacks=[
+                lambda frame, timestep: captured_masked_frames[0].append((int(timestep), np.asarray(frame, dtype=np.uint8))),
+                lambda frame, timestep: captured_masked_frames[1].append((int(timestep), np.asarray(frame, dtype=np.uint8))),
+            ],
+        )
+
+        self.assertEqual(
+            [timestep for timestep, _frame in captured_baseline_frames],
+            list(range(report.baseline.steps_taken + 1)),
+        )
+        self.assertEqual(
+            [timestep for timestep, _frame in captured_masked_frames[0]],
+            list(range(report.masked_attempts[0].steps_taken + 1)),
+        )
+        self.assertEqual(
+            [timestep for timestep, _frame in captured_masked_frames[1]],
+            list(range(report.masked_attempts[1].steps_taken + 1)),
+        )
+        self.assertEqual(captured_masked_frames[0][0][1].shape, (12, 12, 3))
+        self.assertEqual(captured_masked_frames[1][0][1].shape, (12, 12, 3))
+
+    def test_marker_events_require_nearly_closed_gripper_for_pickup_attempts(self) -> None:
+        attempt = OnlineInterventionAttempt(
+            attempt_index=1,
+            title="Mask Attempt 1",
+            instruction="Place a black stone on the Go board at row 3, column 4.",
+            masked=True,
+            mask=None,
+            success=False,
+            timed_out=False,
+            steps_taken=3,
+            phase_counts={
+                "move_to_puck": 2,
+                "pick_up_puck": 1,
+                "move_puck": 0,
+                "drop_puck": 1,
+            },
+            trajectory=[
+                OnlineInterventionStep(
+                    timestep=0,
+                    eef_xyz=np.asarray([0.00, 0.00, 0.90], dtype=np.float32),
+                    stone_xyz=np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    action_xyzg=np.asarray([0.0, 0.0, 0.0, 0.79], dtype=np.float32),
+                    gripper_action=0.79,
+                    phase="move_to_puck",
+                    move_committed=False,
+                    stone_grasped=False,
+                    dist_to_source_xy=0.01,
+                    dist_to_target_xy=0.20,
+                ),
+                OnlineInterventionStep(
+                    timestep=1,
+                    eef_xyz=np.asarray([0.01, -0.01, 0.88], dtype=np.float32),
+                    stone_xyz=np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+                    action_xyzg=np.asarray([0.0, 0.0, 0.0, 0.81], dtype=np.float32),
+                    gripper_action=0.81,
+                    phase="move_to_puck",
+                    move_committed=False,
+                    stone_grasped=False,
+                    dist_to_source_xy=0.01,
+                    dist_to_target_xy=0.19,
+                ),
+                OnlineInterventionStep(
+                    timestep=2,
+                    eef_xyz=np.asarray([0.02, -0.12, 0.82], dtype=np.float32),
+                    stone_xyz=np.asarray([0.02, -0.12, 0.82], dtype=np.float32),
+                    action_xyzg=np.asarray([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+                    gripper_action=1.0,
+                    phase="pick_up_puck",
+                    move_committed=False,
+                    stone_grasped=True,
+                    dist_to_source_xy=0.0,
+                    dist_to_target_xy=0.18,
+                ),
+                OnlineInterventionStep(
+                    timestep=3,
+                    eef_xyz=np.asarray([0.20, 0.14, 0.83], dtype=np.float32),
+                    stone_xyz=np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+                    action_xyzg=np.asarray([0.0, 0.0, 0.0, 0.0], dtype=np.float32),
+                    gripper_action=0.0,
+                    phase="drop_puck",
+                    move_committed=True,
+                    stone_grasped=False,
+                    dist_to_source_xy=0.31,
+                    dist_to_target_xy=0.0,
+                ),
+            ],
+            target_row=3,
+            target_col=4,
+            target_xyz=np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+            source_xyz=np.asarray([0.02, -0.12, 0.80], dtype=np.float32),
+            final_stone_xyz=np.asarray([0.20, 0.14, 0.82], dtype=np.float32),
+            phase_transition_steps={
+                "move_to_puck": 0,
+                "pick_up_puck": 2,
+                "move_puck": None,
+                "drop_puck": 3,
+            },
+            event_steps={
+                "first_grasp": 2,
+                "first_move_puck": None,
+                "first_drop": 3,
+            },
+            ever_grasped=True,
+            ever_moved_puck=False,
+            ever_released=True,
+        )
+
+        pickup_attempts, grasped_points, releases = _marker_events(attempt)
+
+        self.assertEqual([step_idx for _xyz, step_idx in pickup_attempts], [1])
+        self.assertEqual([step_idx for _xyz, step_idx in grasped_points], [2])
+        self.assertEqual([step_idx for _xyz, step_idx in releases], [3])
 
     def test_online_report_renderer_accumulates_identical_masked_attempts(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1975,6 +2263,56 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             )
             self.assertEqual(manifest["trace_format"], "openvla_causal_localization_v1")
             self.assertEqual(manifest["episodes"][0]["layer_count"], 3)
+
+    def test_causal_trace_roundtrip_with_embedded_clips(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            dataset_path = tmp_path / "source_go.hdf5"
+            trace_path = tmp_path / "causal_trace_embedded.npz"
+            self._write_dataset(dataset_path)
+
+            clips = GoHDF5DatasetAdapter().load_episode_clips(
+                dataset_path=dataset_path,
+                demos=None,
+                start=0,
+                num_demos=0,
+                stride=1,
+                max_steps=0,
+            )
+            traces = collect_episode_causal_traces(clips=clips, model_adapter=_FakeCausalAdapter())
+
+            save_causal_trace_file(
+                trace_path=trace_path,
+                dataset_path=None,
+                clips=clips,
+                traces=traces,
+                checkpoint="/tmp/fake-openvla",
+                prompt_style="openvla",
+                dataset_adapter=None,
+                model_adapter="openvla",
+                embed_clips=True,
+            )
+
+            bundle = load_causal_trace_file(trace_path)
+            self.assertIsNone(bundle.dataset_path)
+            self.assertIsNotNone(bundle.embedded_clips_by_key)
+            assert bundle.embedded_clips_by_key is not None
+            embedded_clip = bundle.embedded_clips_by_key["demo_0"]
+            self.assertEqual(embedded_clip.instruction, clips[0].instruction)
+            np.testing.assert_array_equal(embedded_clip.images, clips[0].images)
+            np.testing.assert_array_equal(embedded_clip.gt_actions, clips[0].gt_actions)
+            np.testing.assert_array_equal(embedded_clip.frame_indices, clips[0].frame_indices)
+
+            manifest = causal_trace_manifest(
+                dataset_path=None,
+                checkpoint="/tmp/fake-openvla",
+                prompt_style="openvla",
+                dataset_adapter=None,
+                model_adapter="openvla",
+                clips=clips,
+                traces=traces,
+            )
+            self.assertIsNone(manifest["dataset_path"])
 
     def test_causal_heatmap_colormap_uses_fixed_restoration_scale(self) -> None:
         normalized = _normalize_restoration_scores(

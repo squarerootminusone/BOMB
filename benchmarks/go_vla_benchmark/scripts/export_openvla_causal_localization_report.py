@@ -50,11 +50,19 @@ def _load_adjusted_clips(args: argparse.Namespace, demo_keys: List[str]):
     missing = [demo_key for demo_key in demo_keys if demo_key not in trace_bundle.traces]
     if missing:
         raise ValueError(f"requested demos missing from trace data: {missing}")
+    requested_demos = demo_keys if demo_keys else trace_bundle.demo_keys
+    if args.dataset is None and trace_bundle.embedded_clips_by_key is not None:
+        missing_embedded = [demo_key for demo_key in requested_demos if demo_key not in trace_bundle.embedded_clips_by_key]
+        if missing_embedded:
+            raise ValueError(f"requested demos missing from embedded clips: {missing_embedded}")
+        return trace_bundle, [trace_bundle.embedded_clips_by_key[demo_key] for demo_key in requested_demos]
+
     dataset_path = resolve_dataset_path(args.dataset, repo_root=REPO_ROOT) if args.dataset else trace_bundle.dataset_path
+    if dataset_path is None:
+        raise ValueError("the trace does not embed clips; pass --dataset to export this report")
     dataset_adapter_name = args.dataset_adapter or trace_bundle.dataset_adapter or "go-hdf5"
     dataset_adapter = DATASET_ADAPTERS[dataset_adapter_name]()
 
-    requested_demos = demo_keys if demo_keys else trace_bundle.demo_keys
     clips = dataset_adapter.load_episode_clips(
         dataset_path=dataset_path,
         demos=",".join(requested_demos),

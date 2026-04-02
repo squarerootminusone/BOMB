@@ -14,7 +14,10 @@ It supports:
 
 ## Inputs
 
-- an HDF5 Go dataset loaded through the existing RLDS-style clip adapter
+- either:
+  - an HDF5 Go dataset loaded through the existing RLDS-style clip adapter
+  - random successful simulator demos collected on the fly with
+    `--simulator-demos`
 - an OpenVLA checkpoint
 - a corruption family:
   - `patch-occlusion`
@@ -33,10 +36,14 @@ Report export writes:
 - one JSON and one Markdown file per step
 - one restoration heatmap PNG per step
 
-Both collection and report export keep demos in the same order exposed by the
-source HDF5 file, so the `.npz`, report index, and per-demo folders line up for
-easy comparison. If you use `--top-k` during export, it keeps that subset in
-dataset order instead of re-sorting the report by score.
+Both collection and report export keep demos in a stable input order:
+
+- HDF5 runs keep the order exposed by the source dataset
+- simulator runs keep the successful simulator-sampling order
+
+That keeps the `.npz`, report index, and per-demo folders lined up for easy
+comparison. If you use `--top-k` during export, it keeps that subset in input
+order instead of re-sorting the report by score.
 
 The exported PNG now annotates the layer rows and head columns directly in the
 image:
@@ -58,18 +65,17 @@ Use the strongest patch occlusion per step as the corrupted input:
 ```bash
 conda run --no-capture-output -n main \
   python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py \
-  --dataset /root/dsait4125/benchmarks/go_vla_benchmark/data/source_go.hdf5 \
   --checkpoint /root/16-18-14/checkpoints/best-merged \
-  --trace-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.npz \
-  --summary-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.json \
-  --num-demos 4 \
+  --trace-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/simulator_patch_causal.npz \
+  --summary-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/simulator_patch_causal.json \
+  --simulator-demos 4 \
   --stride 4 \
   --device cuda:0 \
   --corruption-type patch-occlusion \
   --attn-implementation eager
 
 python benchmarks/go_vla_benchmark/scripts/export_openvla_causal_localization_report.py \
-  --trace-input benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal.npz \
+  --trace-input benchmarks/go_vla_benchmark/data/causal/simulator_patch_causal.npz \
   --output-dir benchmarks/go_vla_benchmark/data/causal/report_patch
 ```
 
@@ -119,7 +125,8 @@ frame selection and instead follows the intervention `.npz` exactly. By
 default it looks for a matching trace under
 `benchmarks/go_vla_benchmark/data/interventions/` based on the dataset stem and
 `--corruption-type`, but you can also pass an explicit intervention `.npz`
-path as the value of `--intervention-match`.
+path as the value of `--intervention-match`. For simulator-backed intervention
+traces, pass that explicit path because there is no dataset stem to infer from.
 
 Pin a specific corrupted patch or token index:
 
@@ -215,6 +222,8 @@ if none are present:
   signal usually comes from decoder layers and self-attention heads.
 - `--per-cross-attention` is optional by design because some checkpoints will
   not expose separate cross-attention blocks.
+- Simulator-backed traces embed their clips directly, so report export works
+  without `--dataset`.
 - The stored score is a normalized restoration ratio:
   `(patched - corrupted) / (clean - corrupted)` on target-token log-probability.
 - The PNG uses that same scalar score directly for coloring:

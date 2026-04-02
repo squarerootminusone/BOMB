@@ -23,6 +23,14 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     resolve_optional_path,
     save_intervention_trace_file,
 )
+from go_vla_benchmark.explainability.simulator import (  # noqa: E402
+    DEFAULT_SIMULATOR_CAMERA_SIZE,
+    DEFAULT_SIMULATOR_ENVIRONMENT,
+    DEFAULT_SIMULATOR_MAX_ATTEMPTS_PER_DEMO,
+    DEFAULT_SIMULATOR_OPENING_MAX,
+    DEFAULT_SIMULATOR_OPENING_MIN,
+    collect_simulator_episode_clips,
+)
 
 def _print_runtime_diagnostics(args: argparse.Namespace, clips, model_adapter) -> None:
     import torch
@@ -58,7 +66,18 @@ def _print_runtime_diagnostics(args: argparse.Namespace, clips, model_adapter) -
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", required=True, type=str, help="Go benchmark HDF5 dataset")
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="optional Go benchmark HDF5 dataset; omit with --simulator-demos to sample random simulator clips",
+    )
+    parser.add_argument(
+        "--simulator-demos",
+        type=int,
+        default=0,
+        help="number of random successful simulator demos to collect when no --dataset is provided",
+    )
     parser.add_argument("--checkpoint", required=True, type=str, help="OpenVLA checkpoint path or HF id")
     parser.add_argument("--trace-output", required=True, type=str, help="output .npz trace path")
     parser.add_argument("--summary-output", type=str, default=None, help="optional summary JSON path")
@@ -68,10 +87,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--unnorm-key", type=str, default=None, help="dataset statistics key for de-normalizing actions")
     parser.add_argument("--action-dim", type=int, default=None, help="fallback action dimension when norm stats are absent")
     parser.add_argument("--start", type=int, default=0, help="start demo index in dataset order")
-    parser.add_argument("--num-demos", type=int, default=0, help="number of demos to process; <= 0 means all")
-    parser.add_argument("--demos", type=str, default=None, help="optional comma-separated demo keys")
+    parser.add_argument("--num-demos", type=int, default=0, help="number of dataset demos to process; <= 0 means all")
+    parser.add_argument("--demos", type=str, default=None, help="optional comma-separated dataset demo keys")
     parser.add_argument("--stride", type=int, default=1, help="extra frame stride after RLDS-style subsampling/filtering")
     parser.add_argument("--max-steps", type=int, default=0, help="max timesteps per demo after applying stride")
+    parser.add_argument("--seed", type=int, default=7, help="random seed for simulator-backed demo generation")
+    parser.add_argument("--environment-name", type=str, default=DEFAULT_SIMULATOR_ENVIRONMENT)
+    parser.add_argument("--camera-size", type=int, default=DEFAULT_SIMULATOR_CAMERA_SIZE)
+    parser.add_argument("--robot", type=str, default="Panda")
+    parser.add_argument("--gripper-types", type=str, default="default")
+    parser.add_argument("--simulator-opening-min", type=int, default=DEFAULT_SIMULATOR_OPENING_MIN)
+    parser.add_argument("--simulator-opening-max", type=int, default=DEFAULT_SIMULATOR_OPENING_MAX)
+    parser.add_argument(
+        "--simulator-max-attempts-per-demo",
+        type=int,
+        default=DEFAULT_SIMULATOR_MAX_ATTEMPTS_PER_DEMO,
+    )
     parser.add_argument("--attention-layers", type=int, default=4, help="number of last decoder layers to average")
     parser.add_argument(
         "--attn-implementation",
@@ -93,6 +124,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _validate_source_args(args: argparse.Namespace) -> None:
+    has_dataset = args.dataset is not None
+    has_simulator = int(args.simulator_demos) > 0
+    if has_dataset == has_simulator:
+        raise ValueError("pass exactly one of --dataset or --simulator-demos")
+    if has_simulator and (args.demos is not None or args.start != 0 or args.num_demos != 0):
+        raise ValueError("--simulator-demos does not use --demos, --start, or --num-demos")
+
+
 def _parse_runs(raw: str) -> set[str]:
     allowed = {"patch-occlusion", "text-masking", "minimal-counterfactual"}
     selected = {item.strip() for item in raw.split(",") if item.strip()}
@@ -104,23 +144,39 @@ def _parse_runs(raw: str) -> set[str]:
 
 def main() -> None:
     args = parse_args()
+    _validate_source_args(args)
     selected_runs = _parse_runs(args.runs)
 
-    dataset_path = resolve_dataset_path(args.dataset, repo_root=REPO_ROOT)
     trace_output_path = resolve_optional_path(args.trace_output, repo_root=REPO_ROOT)
     summary_output_path = resolve_optional_path(args.summary_output, repo_root=REPO_ROOT)
+    dataset_path = resolve_dataset_path(args.dataset, repo_root=REPO_ROOT) if args.dataset else None
 
-    dataset_adapter = DATASET_ADAPTERS[args.dataset_adapter]()
-    clips = dataset_adapter.load_episode_clips(
-        dataset_path=dataset_path,
-        demos=args.demos,
-        start=args.start,
-        num_demos=args.num_demos,
-        stride=args.stride,
-        max_steps=args.max_steps,
-    )
+    if dataset_path is not None:
+        dataset_adapter = DATASET_ADAPTERS[args.dataset_adapter]()
+        clips = dataset_adapter.load_episode_clips(
+            dataset_path=dataset_path,
+            demos=args.demos,
+            start=args.start,
+            num_demos=args.num_demos,
+            stride=args.stride,
+            max_steps=args.max_steps,
+        )
+    else:
+        clips = collect_simulator_episode_clips(
+            num_demos=args.simulator_demos,
+            seed=args.seed,
+            stride=args.stride,
+            max_steps=args.max_steps,
+            environment_name=args.environment_name,
+            camera_size=args.camera_size,
+            opening_moves_min=args.simulator_opening_min,
+            opening_moves_max=args.simulator_opening_max,
+            max_attempts_per_demo=args.simulator_max_attempts_per_demo,
+            robot=args.robot,
+            gripper_types=args.gripper_types,
+        )
     if not clips:
-        raise RuntimeError("no demos selected from dataset")
+        raise RuntimeError("no demos available from the selected input source")
 
     model_adapter = INTERVENTION_MODEL_ADAPTERS[args.model_adapter](
         checkpoint=args.checkpoint,
@@ -153,21 +209,24 @@ def main() -> None:
         traces=traces,
         checkpoint=args.checkpoint,
         prompt_style=model_adapter.prompt_style,
-        dataset_adapter=args.dataset_adapter,
+        dataset_adapter=args.dataset_adapter if dataset_path is not None else None,
         model_adapter=args.model_adapter,
+        embed_clips=dataset_path is None,
     )
 
     summary = intervention_trace_manifest(
         dataset_path=dataset_path,
         checkpoint=args.checkpoint,
         prompt_style=model_adapter.prompt_style,
-        dataset_adapter=args.dataset_adapter,
+        dataset_adapter=args.dataset_adapter if dataset_path is not None else None,
         model_adapter=args.model_adapter,
         clips=clips,
         traces=traces,
     )
     summary["trace_path"] = str(trace_output_path)
     summary["runs"] = sorted(selected_runs)
+    summary["clip_source"] = "dataset" if dataset_path is not None else "simulator"
+    summary["embedded_clips"] = bool(dataset_path is None)
 
     if summary_output_path is not None:
         summary_output_path.parent.mkdir(parents=True, exist_ok=True)

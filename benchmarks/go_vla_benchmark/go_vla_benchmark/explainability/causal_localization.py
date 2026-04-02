@@ -8,11 +8,18 @@ from typing import Dict, List, Optional, Protocol, Sequence
 
 import numpy as np
 
-from .core import EpisodeClip, LocalExplanationStep, _to_object_array, compute_episode_scores
+from .core import (
+    EpisodeClip,
+    LocalExplanationStep,
+    _to_object_array,
+    compute_episode_scores,
+    load_embedded_episode_clips,
+    serialize_embedded_episode_clips,
+)
 
 
 CAUSAL_TRACE_FORMAT = "openvla_causal_localization_v1"
-CAUSAL_SCHEMA_VERSION = 1
+CAUSAL_SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -54,7 +61,7 @@ class EpisodeCausalTrace:
 
 @dataclass
 class CausalTraceBundle:
-    dataset_path: Path
+    dataset_path: Optional[Path]
     checkpoint: Optional[str]
     prompt_style: Optional[str]
     dataset_adapter: Optional[str]
@@ -64,6 +71,7 @@ class CausalTraceBundle:
     traces: Dict[str, EpisodeCausalTrace]
     frame_indices_by_key: Dict[str, np.ndarray]
     demo_keys: List[str]
+    embedded_clips_by_key: Optional[Dict[str, EpisodeClip]] = None
 
 
 class CausalLocalizationModelAdapter(Protocol):
@@ -204,21 +212,21 @@ def _step_from_dict(payload: Dict[str, object]) -> CausalLocalizationStep:
 
 def save_causal_trace_file(
     trace_path: Path,
-    dataset_path: Path,
+    dataset_path: Optional[Path],
     clips: Sequence[EpisodeClip],
     traces: Sequence[EpisodeCausalTrace],
     checkpoint: Optional[str],
     prompt_style: Optional[str],
     dataset_adapter: Optional[str],
     model_adapter: Optional[str],
+    embed_clips: bool = False,
 ) -> None:
     trace_path.parent.mkdir(parents=True, exist_ok=True)
     clip_by_key = {clip.demo_key: clip for clip in clips}
-    np.savez_compressed(
-        trace_path,
+    payload = dict(
         trace_format=CAUSAL_TRACE_FORMAT,
         schema_version=np.int32(CAUSAL_SCHEMA_VERSION),
-        dataset_path=str(dataset_path),
+        dataset_path="" if dataset_path is None else str(dataset_path),
         checkpoint="" if checkpoint is None else checkpoint,
         prompt_style="" if prompt_style is None else prompt_style,
         dataset_adapter="" if dataset_adapter is None else dataset_adapter,
@@ -232,6 +240,9 @@ def save_causal_trace_file(
         score=np.asarray([trace.score for trace in traces], dtype=np.float32),
         steps=_to_object_array([_step_to_dict(step) for step in trace.steps] for trace in traces),
     )
+    if embed_clips:
+        payload.update(serialize_embedded_episode_clips(clips))
+    np.savez_compressed(trace_path, **payload)
 
 
 def load_causal_trace_file(trace_path: Path) -> CausalTraceBundle:
@@ -246,6 +257,7 @@ def load_causal_trace_file(trace_path: Path) -> CausalTraceBundle:
         score = np.asarray(data["score"], dtype=np.float32)
         frame_indices = data["frame_indices"].tolist()
         steps = data["steps"].tolist()
+        embedded_clips_by_key = load_embedded_episode_clips(data)
 
         traces: Dict[str, EpisodeCausalTrace] = {}
         frame_indices_by_key: Dict[str, np.ndarray] = {}
@@ -263,8 +275,9 @@ def load_causal_trace_file(trace_path: Path) -> CausalTraceBundle:
 
         trace_format = _optional_scalar(data, "trace_format") or CAUSAL_TRACE_FORMAT
         schema_version = int(np.asarray(data["schema_version"]).item()) if "schema_version" in data else 1
+        dataset_path_str = _optional_scalar(data, "dataset_path")
         return CausalTraceBundle(
-            dataset_path=Path(str(data["dataset_path"].tolist())).expanduser(),
+            dataset_path=None if dataset_path_str is None else Path(dataset_path_str).expanduser(),
             checkpoint=_optional_scalar(data, "checkpoint"),
             prompt_style=_optional_scalar(data, "prompt_style"),
             dataset_adapter=_optional_scalar(data, "dataset_adapter"),
@@ -274,11 +287,12 @@ def load_causal_trace_file(trace_path: Path) -> CausalTraceBundle:
             traces=traces,
             frame_indices_by_key=frame_indices_by_key,
             demo_keys=demo_keys,
+            embedded_clips_by_key=embedded_clips_by_key,
         )
 
 
 def causal_trace_manifest(
-    dataset_path: Path,
+    dataset_path: Optional[Path],
     checkpoint: Optional[str],
     prompt_style: Optional[str],
     dataset_adapter: Optional[str],
@@ -316,7 +330,7 @@ def causal_trace_manifest(
     return {
         "trace_format": CAUSAL_TRACE_FORMAT,
         "schema_version": CAUSAL_SCHEMA_VERSION,
-        "dataset_path": str(dataset_path),
+        "dataset_path": None if dataset_path is None else str(dataset_path),
         "checkpoint": checkpoint,
         "prompt_style": prompt_style,
         "dataset_adapter": dataset_adapter,
