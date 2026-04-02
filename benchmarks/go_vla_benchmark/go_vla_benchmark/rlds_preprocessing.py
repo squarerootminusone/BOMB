@@ -15,9 +15,28 @@ INSTRUCTION_TEMPLATES = [
     "Move the {color} stone to row {r}, column {c} on the board.",
     "Set a {color} stone at ({r}, {c}).",
 ]
+# Keep these templates and `format_instruction_template` in sync with
+# `rlds_builder/go_vla_dataset/go_vla_dataset_dataset_builder.py`.
 
 RLDS_SUBSAMPLE_STRIDE = 4
 RLDS_NOOP_THRESHOLD = 1e-4
+
+
+def format_instruction_template(
+    template: str,
+    *,
+    color: str,
+    row: int,
+    col: int,
+) -> str:
+    """Format Go benchmark instructions with either RLDS or CLI-style placeholders."""
+    return str(template).format(
+        color=str(color),
+        r=int(row),
+        c=int(col),
+        row=int(row),
+        col=int(col),
+    )
 
 
 def derive_target_from_board_state(board_state: np.ndarray) -> tuple[int, int]:
@@ -97,4 +116,4 @@ def build_instruction(
     color = stone_color or "black"
     rng = np.random.RandomState(seed=int(demo_idx))
     template = INSTRUCTION_TEMPLATES[rng.randint(len(INSTRUCTION_TEMPLATES))]
-    return template.format(color=color, r=row, c=col)
+    return format_instruction_template(template, color=color, row=row, col=col)

@@ -63,6 +63,7 @@ from go_vla_benchmark.explainability.reporting_online_interventions import (  # 
     _masked_attempt_xy_offsets,
     _time_alpha,
 )
+from go_vla_benchmark.rlds_preprocessing import format_instruction_template  # noqa: E402
 
 
 def _contains_rgb(image: np.ndarray, rgb: np.ndarray, *, tolerance: int = 12) -> bool:
@@ -158,39 +159,115 @@ class _FakeInterventionAdapter(_FakeModelAdapter):
     ) -> InterventionScan:
         del image, baseline_step, top_k
         task_text = instruction.lower()
-        stone_start = task_text.find("stone")
-        stone_end = stone_start + len("stone") if stone_start >= 0 else -1
+        color_start = task_text.find("black")
+        color_end = color_start + len("black") if color_start >= 0 else -1
+        row_start = task_text.find("3")
+        row_end = row_start + 1 if row_start >= 0 else -1
+        col_start = task_text.rfind("4")
+        col_end = col_start + 1 if col_start >= 0 else -1
+        coord_label = "row 3, column 4"
+        coord_start = task_text.find(coord_label)
+        coord_end = coord_start + len(coord_label) if coord_start >= 0 else -1
         board_start = task_text.find("go board")
         board_end = board_start + len("go board") if board_start >= 0 else -1
+        row_phrase_start = task_text.find("row 3")
+        row_phrase_end = row_phrase_start + len("row 3") if row_phrase_start >= 0 else -1
+        col_phrase_start = task_text.find("column 4")
+        col_phrase_end = col_phrase_start + len("column 4") if col_phrase_start >= 0 else -1
         return InterventionScan(
-            effect_map=np.asarray([0.25, 0.15], dtype=np.float32),
+            effect_map=np.asarray([0.30, 0.05, 0.04, 0.42, 0.18, 0.16, 0.17], dtype=np.float32),
             top_candidates=[
                 InterventionCandidateEffect(
-                    index=0,
-                    label="stone",
-                    score=0.25,
+                    index=3,
+                    label=coord_label,
+                    score=0.42,
                     pred_action_xyzg=np.asarray([0.4, 0.1, -0.2, -1.0], dtype=np.float32),
                     raw_pred_action=np.asarray([0.4, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
                     target_token_ids=np.asarray([31, 32, 33], dtype=np.int64),
                     target_token_probs=np.asarray([0.6, 0.5, 0.4], dtype=np.float32),
                     target_token_bin_indices=np.asarray([301, 302, 303], dtype=np.int64),
                     target_token_bin_centers=np.asarray([-0.3, 0.2, 0.8], dtype=np.float32),
-                    task_char_start=None if stone_start < 0 else stone_start,
-                    task_char_end=None if stone_start < 0 else stone_end,
+                    task_char_start=None if coord_start < 0 else coord_start,
+                    task_char_end=None if coord_start < 0 else coord_end,
                 ),
                 InterventionCandidateEffect(
-                    index=1,
-                    label="go board",
-                    score=0.15,
+                    index=0,
+                    label="black",
+                    score=0.30,
                     pred_action_xyzg=np.asarray([0.35, 0.1, -0.2, -1.0], dtype=np.float32),
                     raw_pred_action=np.asarray([0.35, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
                     target_token_ids=np.asarray([34, 35, 36], dtype=np.int64),
                     target_token_probs=np.asarray([0.55, 0.45, 0.35], dtype=np.float32),
                     target_token_bin_indices=np.asarray([304, 305, 306], dtype=np.int64),
                     target_token_bin_centers=np.asarray([-0.2, 0.25, 0.7], dtype=np.float32),
+                    task_char_start=None if color_start < 0 else color_start,
+                    task_char_end=None if color_start < 0 else color_end,
+                ),
+                InterventionCandidateEffect(
+                    index=4,
+                    label="go board",
+                    score=0.18,
+                    pred_action_xyzg=np.asarray([0.33, 0.1, -0.2, -1.0], dtype=np.float32),
+                    raw_pred_action=np.asarray([0.33, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
+                    target_token_ids=np.asarray([37, 38, 39], dtype=np.int64),
+                    target_token_probs=np.asarray([0.52, 0.44, 0.34], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([307, 308, 309], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.18, 0.22, 0.68], dtype=np.float32),
                     task_char_start=None if board_start < 0 else board_start,
                     task_char_end=None if board_start < 0 else board_end,
-                )
+                ),
+                InterventionCandidateEffect(
+                    index=6,
+                    label="column 4",
+                    score=0.17,
+                    pred_action_xyzg=np.asarray([0.31, 0.1, -0.2, -1.0], dtype=np.float32),
+                    raw_pred_action=np.asarray([0.31, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
+                    target_token_ids=np.asarray([40, 41, 42], dtype=np.int64),
+                    target_token_probs=np.asarray([0.5, 0.42, 0.32], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([310, 311, 312], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.15, 0.24, 0.66], dtype=np.float32),
+                    task_char_start=None if col_phrase_start < 0 else col_phrase_start,
+                    task_char_end=None if col_phrase_start < 0 else col_phrase_end,
+                ),
+                InterventionCandidateEffect(
+                    index=5,
+                    label="row 3",
+                    score=0.16,
+                    pred_action_xyzg=np.asarray([0.29, 0.1, -0.2, -1.0], dtype=np.float32),
+                    raw_pred_action=np.asarray([0.29, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
+                    target_token_ids=np.asarray([43, 44, 45], dtype=np.int64),
+                    target_token_probs=np.asarray([0.48, 0.4, 0.3], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([313, 314, 315], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.12, 0.26, 0.64], dtype=np.float32),
+                    task_char_start=None if row_phrase_start < 0 else row_phrase_start,
+                    task_char_end=None if row_phrase_start < 0 else row_phrase_end,
+                ),
+                InterventionCandidateEffect(
+                    index=1,
+                    label="3",
+                    score=0.05,
+                    pred_action_xyzg=np.asarray([0.27, 0.1, -0.2, -1.0], dtype=np.float32),
+                    raw_pred_action=np.asarray([0.27, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
+                    target_token_ids=np.asarray([46, 47, 48], dtype=np.int64),
+                    target_token_probs=np.asarray([0.46, 0.38, 0.28], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([316, 317, 318], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.1, 0.28, 0.62], dtype=np.float32),
+                    task_char_start=None if row_start < 0 else row_start,
+                    task_char_end=None if row_start < 0 else row_end,
+                ),
+                InterventionCandidateEffect(
+                    index=2,
+                    label="4",
+                    score=0.04,
+                    pred_action_xyzg=np.asarray([0.25, 0.1, -0.2, -1.0], dtype=np.float32),
+                    raw_pred_action=np.asarray([0.25, 0.1, -0.2, 0.0, 0.0, 0.0, -1.0], dtype=np.float32),
+                    target_token_ids=np.asarray([49, 50, 51], dtype=np.int64),
+                    target_token_probs=np.asarray([0.44, 0.36, 0.26], dtype=np.float32),
+                    target_token_bin_indices=np.asarray([319, 320, 321], dtype=np.int64),
+                    target_token_bin_centers=np.asarray([-0.08, 0.3, 0.6], dtype=np.float32),
+                    task_char_start=None if col_start < 0 else col_start,
+                    task_char_end=None if col_start < 0 else col_end,
+                ),
             ],
         )
 
@@ -355,13 +432,24 @@ class _FakeOnlinePolicy(_FakeInterventionAdapter):
         target_row: int | None = None,
         target_col: int | None = None,
     ) -> TextMaskCandidateSpec:
-        del instruction, target_row, target_col
-        resolved_index = 0 if index is None else int(index)
+        del instruction
         default_labels = {
-            0: "row 3, column 4",
-            1: "go board",
-            2: "stone",
+            0: "black",
+            1: "3",
+            2: "4",
+            3: "row 3, column 4",
+            4: "go board",
+            5: "row 3",
+            6: "column 4",
         }
+        if index is not None:
+            resolved_index = int(index)
+        elif label is not None:
+            resolved_index = next((idx for idx, candidate_label in default_labels.items() if candidate_label == label), 0)
+        elif target_row == 3 and target_col == 4:
+            resolved_index = 3
+        else:
+            resolved_index = 0
         resolved_label = default_labels.get(resolved_index, f"mask {resolved_index}") if label is None else label
         return TextMaskCandidateSpec(
             index=resolved_index,
@@ -1636,10 +1724,46 @@ class ExplainabilityPipelineTest(unittest.TestCase):
             reference_image=reference_image,
             instruction=instruction,
             intervention_kind="text",
-            max_masks=2,
+            max_masks=5,
         )
-        self.assertEqual([mask.index for mask in text_masks], [0, 1])
-        self.assertEqual([mask.label for mask in text_masks], ["row 3, column 4", "go board"])
+        self.assertEqual([mask.index for mask in text_masks], [3, 0, 4, 6, 5])
+        self.assertEqual([mask.label for mask in text_masks], ["row 3, column 4", "black", "go board", "column 4", "row 3"])
+
+    def test_fixed_seven_mask_shortlist(self) -> None:
+        policy = _FakeOnlinePolicy()
+        text_masks = select_online_intervention_masks_from_reference(
+            policy=policy,
+            reference_image=np.full((4, 4, 3), fill_value=80, dtype=np.uint8),
+            instruction="Place a black stone on the Go board at row 3, column 4.",
+            intervention_kind="text",
+            max_masks=10,
+        )
+
+        self.assertEqual(len(text_masks), 7)
+        self.assertEqual(
+            [mask.label for mask in text_masks],
+            ["row 3, column 4", "black", "go board", "column 4", "row 3", "3", "4"],
+        )
+
+    def test_format_instruction_template_supports_r_and_row_placeholders(self) -> None:
+        self.assertEqual(
+            format_instruction_template(
+                "Move the {color} stone to row {r}, column {c} on the board.",
+                color="white",
+                row=2,
+                col=4,
+            ),
+            "Move the white stone to row 2, column 4 on the board.",
+        )
+        self.assertEqual(
+            format_instruction_template(
+                "Place a {color} stone on the Go board at row {row}, column {col}.",
+                color="black",
+                row=3,
+                col=1,
+            ),
+            "Place a black stone on the Go board at row 3, column 1.",
+        )
 
     def test_collect_online_patch_report_uses_patch_mask_and_opening_history(self) -> None:
         scenarios = [

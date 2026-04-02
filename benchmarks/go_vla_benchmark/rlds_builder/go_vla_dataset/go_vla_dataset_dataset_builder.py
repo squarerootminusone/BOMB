@@ -29,6 +29,17 @@ _INSTRUCTION_TEMPLATES = [
     "Set a {color} stone at ({r}, {c}).",
 ]
 
+# Keep this helper and `_INSTRUCTION_TEMPLATES` in sync with
+# `go_vla_benchmark.rlds_preprocessing`.
+def _format_instruction_template(template: str, *, color: str, row: int, col: int) -> str:
+    return str(template).format(
+        color=str(color),
+        r=int(row),
+        c=int(col),
+        row=int(row),
+        col=int(col),
+    )
+
 _USE_EMBED_DIM = 512
 
 
@@ -241,7 +252,12 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                 template = _INSTRUCTION_TEMPLATES[
                     rng.randint(len(_INSTRUCTION_TEMPLATES))
                 ]
-                instruction = template.format(color=stone_color, r=row, c=col)
+                instruction = _format_instruction_template(
+                    template,
+                    color=stone_color,
+                    row=row,
+                    col=col,
+                )
                 embedding = _compute_use_embedding(instruction)
 
                 num_steps = actions_4d.shape[0]

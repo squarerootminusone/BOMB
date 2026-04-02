@@ -35,6 +35,7 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     resolve_repo_relative_path,
     select_online_intervention_masks_from_reference,
 )
+from go_vla_benchmark.rlds_preprocessing import format_instruction_template  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -94,7 +95,7 @@ def parse_args() -> argparse.Namespace:
         "--instruction-template",
         type=str,
         default="Place a black stone on the Go board at row {row}, column {col}.",
-        help="format string with {row} and {col}",
+        help="format string with {color}, {r}, {c}, {row}, and {col}",
     )
     parser.add_argument("--mask-label", type=str, default=None, help="optional explicit text span to mask")
     parser.add_argument("--mask-index", type=int, default=None, help="optional explicit text mask candidate index")
@@ -116,8 +117,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _make_instruction(template: str, row: int, col: int) -> str:
-    return str(template).format(row=int(row), col=int(col))
+def _make_instruction(template: str, row: int, col: int, color: str) -> str:
+    return format_instruction_template(template, color=color, row=row, col=col)
 
 
 def _default_baseline_video_path(output_png: Path) -> Path:
@@ -142,7 +143,12 @@ def main() -> None:
     baseline_video_path = resolve_optional_path(args.baseline_video_output, repo_root=REPO_ROOT)
     if baseline_video_path is None:
         baseline_video_path = _default_baseline_video_path(output_png)
-    instruction = _make_instruction(args.instruction_template, row=args.target_row, col=args.target_col)
+    instruction = _make_instruction(
+        args.instruction_template,
+        row=args.target_row,
+        col=args.target_col,
+        color=args.stone_color,
+    )
 
     policy = OpenVLAInterventionAdapter(
         checkpoint=args.checkpoint,

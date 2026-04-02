@@ -90,7 +90,11 @@ For each selected demo it:
 Mask selection is dataset-driven as well:
 
 - text masking is chosen from the reference HDF5 frame by running the offline
-  text-masking scan and taking the top ranked candidates up to `--attempts`
+  text-masking scan over the fixed RLDS 7-mask shortlist derived from the
+  builder templates: `{color}`, `{r}`, `{c}`, the combined `{r}/{c}` phrase,
+  plus three multi-word template phrases
+- the exporter still runs at most `--attempts` masked rollouts from that
+  ranking, so the default setting produces 5 per-demo PNG / JSON / MP4 sets
 - patch masking is chosen from the reference HDF5 frame by running the offline
   patch-occlusion scan and taking the top ranked candidates up to `--attempts`
 

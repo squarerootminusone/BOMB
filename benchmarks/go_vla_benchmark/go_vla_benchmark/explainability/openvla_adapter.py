@@ -27,6 +27,29 @@ _TEXT_MASK_PATTERNS = (
     re.compile(r"column\s+\d+", flags=re.IGNORECASE),
     re.compile(r"go\s+board", flags=re.IGNORECASE),
 )
+_RLDS_TEXT_MASK_SHORTLIST_SIZE = 7
+_RLDS_INSTRUCTION_PATTERNS = (
+    re.compile(
+        r"place a (?P<color>[a-z0-9_-]+) stone on the go board at "
+        r"(?P<coord>row (?P<r>\d+), column (?P<c>\d+))",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"put a (?P<color>[a-z0-9_-]+) stone at "
+        r"(?P<coord>position \((?P<r>\d+), (?P<c>\d+)\)) on the go board",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"move the (?P<color>[a-z0-9_-]+) stone to "
+        r"(?P<coord>row (?P<r>\d+), column (?P<c>\d+)) on the board",
+        flags=re.IGNORECASE,
+    ),
+    re.compile(
+        r"set a (?P<color>[a-z0-9_-]+) stone at "
+        r"(?P<coord>\((?P<r>\d+), (?P<c>\d+)\))",
+        flags=re.IGNORECASE,
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -219,6 +242,13 @@ def _find_instruction_tokens(
 
 
 def _collect_text_mask_spans(task_text: str) -> List[Tuple[str, int, int]]:
+    shortlist_spans = _collect_rlds_text_mask_shortlist(task_text)
+    if shortlist_spans is not None:
+        return shortlist_spans
+    return _collect_generic_text_mask_spans(task_text)
+
+
+def _collect_generic_text_mask_spans(task_text: str) -> List[Tuple[str, int, int]]:
     spans: List[Tuple[str, int, int]] = []
     seen: set[Tuple[int, int]] = set()
 
@@ -244,6 +274,73 @@ def _collect_text_mask_spans(task_text: str) -> List[Tuple[str, int, int]]:
 
     spans.sort(key=lambda item: (item[1], -(item[2] - item[1]), item[0]))
     return spans
+
+
+def _word_count(text: str) -> int:
+    return len(_WORD_SPAN_PATTERN.findall(str(text)))
+
+
+def _collect_rlds_text_mask_shortlist(task_text: str) -> Optional[List[Tuple[str, int, int]]]:
+    normalized = str(task_text).strip().rstrip(".").lower()
+    for pattern in _RLDS_INSTRUCTION_PATTERNS:
+        match = pattern.fullmatch(normalized)
+        if match is None:
+            continue
+
+        spans: List[Tuple[str, int, int]] = []
+        seen: set[Tuple[int, int]] = set()
+
+        def add_span(start: int, end: int) -> bool:
+            start = int(start)
+            end = int(end)
+            if start < 0 or end <= start:
+                return False
+            key = (start, end)
+            if key in seen:
+                return False
+            label = normalized[start:end].strip()
+            if not label:
+                return False
+            seen.add(key)
+            spans.append((label, start, end))
+            return True
+
+        for group_name in ("color", "r", "c", "coord"):
+            add_span(*match.span(group_name))
+
+        row = match.group("r")
+        col = match.group("c")
+        color = match.group("color")
+        extra_labels = [
+            "go board",
+            "the board",
+            f"row {row}",
+            f"column {col}",
+            f"at position ({row}, {col})",
+            f"at ({row}, {col})",
+            f"stone at position ({row}, {col})",
+            f"stone at ({row}, {col})",
+            f"{color} stone",
+        ]
+        for label in extra_labels:
+            if _word_count(label) <= 1:
+                continue
+            start = normalized.find(label)
+            if start < 0:
+                continue
+            add_span(start, start + len(label))
+            if len(spans) >= _RLDS_TEXT_MASK_SHORTLIST_SIZE:
+                return spans[:_RLDS_TEXT_MASK_SHORTLIST_SIZE]
+
+        for label, start, end in _collect_generic_text_mask_spans(normalized):
+            if _word_count(label) <= 1:
+                continue
+            add_span(start, end)
+            if len(spans) >= _RLDS_TEXT_MASK_SHORTLIST_SIZE:
+                return spans[:_RLDS_TEXT_MASK_SHORTLIST_SIZE]
+
+        return spans
+    return None
 
 
 def _build_text_mask_candidates(
