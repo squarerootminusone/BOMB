@@ -1318,7 +1318,7 @@ def _export_online_intervention_report_png_paper_style_pil(
         plot_box=right_plot,
         projection_min=right_projection_min,
         projection_max=right_projection_max,
-        title="Masked Rollouts (Aligned Start)",
+        title="Masked Rollouts",
     )
 
     image = _draw_plot_content(
@@ -1337,14 +1337,6 @@ def _export_online_intervention_report_png_paper_style_pil(
         pickup_attempt_marker_threshold=pickup_attempt_marker_threshold,
     )
     draw = ImageDraw.Draw(image, "RGBA")
-    _draw_reference_markers(
-        draw,
-        attempt=report.baseline,
-        plot_box=left_plot,
-        projection_min=left_projection_min,
-        projection_max=left_projection_max,
-        xy_offset=baseline_offsets[0] if baseline_offsets else None,
-    )
 
     masked_trajectory_colors = [_attempt_accent_color(attempt.attempt_index) for attempt in report.masked_attempts]
     image = _draw_plot_content(
@@ -1361,7 +1353,7 @@ def _export_online_intervention_report_png_paper_style_pil(
         attempt_xy_offsets=masked_offsets,
         trajectory_colors=masked_trajectory_colors,
         show_phase_change_markers=bool(report.masked_attempts),
-        show_aligned_start_marker=bool(report.masked_attempts),
+        show_aligned_start_marker=False,
         pickup_attempt_marker_threshold=pickup_attempt_marker_threshold,
     )
 
@@ -1387,22 +1379,14 @@ def _export_online_intervention_report_png_paper_style_pil(
         phase_row_x += text_w + 90
 
     event_header_y = phase_row_y + 56
-    draw.text((legend_x, event_header_y), "Reference", fill=MASK_LEGEND_HEADER, font=header_font)
-    _draw_reference_legend_row(
-        draw,
-        image=image,
-        origin=(legend_x, event_header_y + 38),
-        font=phase_font,
-        include_aligned_start=bool(report.masked_attempts),
-    )
 
     _draw_attempt_legend(
         image,
         draw,
-        attempts=[report.baseline, *report.masked_attempts],
+        attempts=report.masked_attempts,
         box=(
             legend_x,
-            event_header_y + 96,
+            event_header_y,
             canvas_w - margin_x,
             canvas_h - 24,
         ),
@@ -1455,7 +1439,6 @@ def export_online_intervention_report_png(
         matplotlib.use("Agg", force=True)
         from matplotlib import pyplot as plt
         from matplotlib.collections import LineCollection
-        from matplotlib.legend_handler import HandlerTuple
         from matplotlib.lines import Line2D
     except Exception:
         return _export_online_intervention_report_png_paper_style_pil(
@@ -1490,29 +1473,6 @@ def export_online_intervention_report_png(
         ax.spines["bottom"].set_color("#9CA3AF")
         ax.spines["left"].set_linewidth(0.9)
         ax.spines["bottom"].set_linewidth(0.9)
-
-    def _plot_reference_markers(ax, attempt: OnlineInterventionAttempt, *, xy_offset: np.ndarray | None = None) -> None:
-        source_xy = _offset_projected_xy(attempt.source_xyz, xy_offset=xy_offset)
-        target_xy = _offset_projected_xy(attempt.target_xyz, xy_offset=xy_offset)
-        ax.scatter(
-            [source_xy[0]],
-            [source_xy[1]],
-            s=72,
-            marker="o",
-            facecolors="white",
-            edgecolors=[_mpl_rgba((17, 24, 39), 1.0)],
-            linewidths=1.5,
-            zorder=6,
-        )
-        ax.scatter(
-            [target_xy[0]],
-            [target_xy[1]],
-            s=82,
-            marker="X",
-            c=[_mpl_rgba((17, 24, 39), 1.0)],
-            linewidths=0.0,
-            zorder=6,
-        )
 
     def _plot_attempt(
         ax,
@@ -1603,7 +1563,7 @@ def export_online_intervention_report_png(
     )
     _style_axis(
         masked_ax,
-        title="Masked Rollouts (Aligned Start)",
+        title="Masked Rollouts",
         projection_min=right_projection_min,
         projection_max=right_projection_max,
     )
@@ -1617,8 +1577,6 @@ def export_online_intervention_report_png(
         show_phase_change_markers=True,
         pickup_attempt_marker_threshold=marker_threshold,
     )
-    _plot_reference_markers(baseline_ax, report.baseline, xy_offset=baseline_offsets[0])
-
     masked_trajectory_colors = [_attempt_accent_color(attempt.attempt_index) for attempt in report.masked_attempts]
     for attempt, xy_offset, trajectory_color in zip(report.masked_attempts, masked_offsets, masked_trajectory_colors):
         _plot_attempt(
@@ -1630,65 +1588,13 @@ def export_online_intervention_report_png(
             show_phase_change_markers=True,
             pickup_attempt_marker_threshold=marker_threshold,
         )
-    if report.masked_attempts and report.masked_attempts[0].trajectory:
-        aligned_start_xy = _attempt_xy_points(report.masked_attempts[0], xy_offset=masked_offsets[0])[0]
-        masked_ax.scatter(
-            [aligned_start_xy[0]],
-            [aligned_start_xy[1]],
-            s=84,
-            marker="+",
-            c=[_mpl_rgba(START_MARKER_OUTLINE, 0.95)],
-            linewidths=1.6,
-            zorder=6,
-        )
 
     phase_handles = [
         Line2D([0], [0], color=_mpl_rgba(color, 1.0), lw=3.0, label=label)
         for label, color in _legend_items()
     ]
-    reference_handles: list[object] = [
-        Line2D(
-            [0],
-            [0],
-            marker="o",
-            linestyle="None",
-            markersize=7.0,
-            markerfacecolor="white",
-            markeredgecolor=_mpl_rgba((17, 24, 39), 1.0),
-            markeredgewidth=1.3,
-            label="Source",
-        ),
-        Line2D(
-            [0],
-            [0],
-            marker="X",
-            linestyle="None",
-            markersize=7.2,
-            markerfacecolor=_mpl_rgba((17, 24, 39), 1.0),
-            markeredgecolor=_mpl_rgba((17, 24, 39), 1.0),
-            label="Target",
-        ),
-    ]
-    if report.masked_attempts:
-        reference_handles.append(
-            Line2D(
-                [0],
-                [0],
-                marker="+",
-                linestyle="None",
-                markersize=9.0,
-                markeredgecolor=_mpl_rgba(START_MARKER_OUTLINE, 0.95),
-                markeredgewidth=1.6,
-                label="Aligned Start",
-            )
-        )
-
-    baseline_handle = tuple(
-        Line2D([0], [0], color=_mpl_rgba(TASK_PHASE_COLORS[phase], 1.0), lw=3.0)
-        for phase in TASK_PHASE_ORDER
-    )
-    attempt_handles: list[object] = [baseline_handle]
-    attempt_labels = [_attempt_label_text(report.baseline)]
+    attempt_handles: list[object] = []
+    attempt_labels: list[str] = []
     for attempt in report.masked_attempts:
         attempt_handles.append(
             Line2D(
@@ -1716,38 +1622,22 @@ def export_online_intervention_report_png(
     )
     legend_ax.add_artist(phase_legend)
 
-    reference_legend = legend_ax.legend(
-        reference_handles,
-        [handle.get_label() for handle in reference_handles],
-        title="Reference",
-        loc="upper left",
-        bbox_to_anchor=(0.0, 0.60),
-        ncol=min(6, max(3, len(reference_handles))),
-        frameon=False,
-        fontsize=10,
-        title_fontsize=11,
-        handlelength=1.8,
-        columnspacing=1.4,
-        borderaxespad=0.0,
-    )
-    legend_ax.add_artist(reference_legend)
-
-    attempt_legend = legend_ax.legend(
-        attempt_handles,
-        attempt_labels,
-        title="Attempts",
-        loc="upper left",
-        bbox_to_anchor=(0.0, 0.18),
-        ncol=min(3, max(1, len(attempt_handles))),
-        frameon=False,
-        fontsize=10,
-        title_fontsize=11,
-        handlelength=2.5,
-        columnspacing=1.4,
-        borderaxespad=0.0,
-        handler_map={tuple: HandlerTuple(ndivide=None, pad=0.25)},
-    )
-    legend_ax.add_artist(attempt_legend)
+    if attempt_handles:
+        attempt_legend = legend_ax.legend(
+            attempt_handles,
+            attempt_labels,
+            title="Attempts",
+            loc="upper left",
+            bbox_to_anchor=(0.0, 0.60),
+            ncol=min(3, max(1, len(attempt_handles))),
+            frameon=False,
+            fontsize=10,
+            title_fontsize=11,
+            handlelength=2.5,
+            columnspacing=1.4,
+            borderaxespad=0.0,
+        )
+        legend_ax.add_artist(attempt_legend)
 
     fig.subplots_adjust(left=0.07, right=0.985, top=0.94, bottom=0.10)
     try:
