@@ -34,6 +34,9 @@ The online report uses the real simulator and online inference. It supports:
 - patch masking
 - dataset-driven report export from recorded Go demos
 - simulator-driven random report export with `--simulator-demos`
+- policy inputs that now match the fine-tune rollout view more closely by using
+  the simulator end-effector overlay plus the same 90% center crop before
+  model inference
 
 The report layout stays paper-style:
 
@@ -181,13 +184,15 @@ unmasked baseline.
 - `--baseline-video-output` still sets the baseline path; masked-attempt files
   are written beside it using the same stem
 - control playback speed with `--video-fps`
-- each MP4 frame overlays a bright tracking dot on the arm point used for the
-  trajectory plot
+- each MP4 frame is written directly from the simulator camera feed, including
+  the environment's own end-effector overlay when enabled
 - the JSON manifest now includes an `output_videos` list with every saved MP4
 
 The rollout collector already had a frame callback hook for the baseline, and
 the masked attempts now use the same callback path so every rollout is streamed
-directly to disk during export.
+directly to disk during export. The policy path uses those same frames, but
+applies the same 90% center crop used in the fine-tune validation rollouts
+before sending images to OpenVLA.
 
 ## Manual Run
 

@@ -232,7 +232,7 @@ def main() -> None:
             camera_width=args.camera_size,
             max_steps=args.max_steps,
             success_hold_steps=0,
-            render_eef_overlay=False,
+            render_eef_overlay=True,
             robot=args.robot,
             gripper_types=args.gripper_types,
         )
