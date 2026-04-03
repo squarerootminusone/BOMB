@@ -241,6 +241,7 @@ def collect_simulator_episode_clips(
     try:
         while len(clips) < int(num_demos) and attempts < max_attempts:
             attempts += 1
+            demo_index = len(clips)
             sampled_reset = _sample_reset_options(
                 rng=rng,
                 opening_moves_min=opening_moves_min,
@@ -249,8 +250,9 @@ def collect_simulator_episode_clips(
             env.reset(options=sampled_reset)
             target_row, target_col = env.get_target_intersection()
             stone_color = str(sampled_reset.stone_color or getattr(env, "_stone_color", "black"))
+            instruction_seed = _demo_simulator_seed(base_seed=seed, demo_index=demo_index)
             instruction = _build_instruction(
-                demo_index=len(clips),
+                seed=instruction_seed,
                 target_row=int(target_row),
                 target_col=int(target_col),
                 stone_color=stone_color,
@@ -274,7 +276,7 @@ def collect_simulator_episode_clips(
                 continue
 
             clip = _episode_to_clip(
-                demo_key=_make_demo_key(len(clips)),
+                demo_key=_make_demo_key(demo_index),
                 instruction=instruction,
                 episode=episode,
                 stride=int(stride),

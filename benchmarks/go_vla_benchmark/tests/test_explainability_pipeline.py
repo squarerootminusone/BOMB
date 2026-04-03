@@ -5,6 +5,8 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
 
 import h5py
 import numpy as np
@@ -55,6 +57,8 @@ from go_vla_benchmark.explainability import (  # noqa: E402
     trace_manifest,
 )
 from go_vla_benchmark.explainability.go_hdf5 import GoHDF5DatasetAdapter  # noqa: E402
+import go_vla_benchmark.explainability.simulator as simulator_explainability  # noqa: E402
+import go_vla_benchmark.env_factory as env_factory_module  # noqa: E402
 from go_vla_benchmark.common import GoResetOptions  # noqa: E402
 from go_vla_benchmark.explainability.reporting_causal import (  # noqa: E402
     _apply_colormap,
@@ -2342,6 +2346,81 @@ class ExplainabilityPipelineTest(unittest.TestCase):
 
         manifest = online_text_mask_report_manifest(report)
         self.assertEqual(manifest["simulator_seed"], 17)
+
+    def test_collect_simulator_episode_clips_uses_seeded_instruction_builder(self) -> None:
+        class _FakeSimulatorEnv:
+            table_top_z = 0.0
+            stone_height = 0.01
+            board_thickness = 0.02
+
+            def __init__(self) -> None:
+                self.closed = False
+                self.reset_options_history: list[GoResetOptions] = []
+
+            def reset(self, options: GoResetOptions) -> dict[str, np.ndarray]:
+                self.reset_options_history.append(options)
+                return {"agentview_image": np.full((4, 4, 3), fill_value=17, dtype=np.uint8)}
+
+            def get_target_intersection(self) -> tuple[int, int]:
+                return (3, 4)
+
+            def close(self) -> None:
+                self.closed = True
+
+        def _fake_collect_single_episode(**kwargs):
+            del kwargs
+            episode = SimpleNamespace(
+                observations={
+                    "agentview_image": np.asarray(
+                        [np.full((4, 4, 3), fill_value=10 * idx, dtype=np.uint8) for idx in range(6)]
+                    )
+                },
+                actions=np.asarray(
+                    [
+                        [1.0, 0.0, 0.0, 1.0],
+                        [0.2, 0.0, 0.0, 1.0],
+                        [0.2, 0.0, 0.0, 1.0],
+                        [0.2, 0.0, 0.0, 1.0],
+                        [0.5, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                    ],
+                    dtype=np.float32,
+                ),
+            )
+            return episode, True
+
+        env = _FakeSimulatorEnv()
+        fake_collect_module = ModuleType("go_vla_benchmark.collect")
+        fake_collect_module._collect_single_episode = _fake_collect_single_episode
+        fake_mimicgen_module = ModuleType("go_vla_benchmark.mimicgen_interface")
+        fake_mimicgen_module.MG_GoJacoSingleMove = lambda env: object()
+
+        with patch.object(env_factory_module, "create_benchmark_env", return_value=env), patch.dict(
+            sys.modules,
+            {
+                "go_vla_benchmark.collect": fake_collect_module,
+                "go_vla_benchmark.mimicgen_interface": fake_mimicgen_module,
+            },
+        ):
+            clips = simulator_explainability.collect_simulator_episode_clips(
+                num_demos=1,
+                seed=11,
+                stride=1,
+                max_steps=0,
+            )
+
+        self.assertEqual(len(clips), 1)
+        self.assertTrue(env.closed)
+        self.assertEqual(clips[0].demo_key, "sim_demo_000")
+        self.assertEqual(
+            clips[0].instruction,
+            simulator_explainability._build_instruction(
+                seed=11,
+                target_row=3,
+                target_col=4,
+                stone_color=env.reset_options_history[0].stone_color,
+            ),
+        )
 
     def test_collect_and_roundtrip_causal_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

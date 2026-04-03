@@ -120,6 +120,13 @@ python benchmarks/go_vla_benchmark/scripts/export_openvla_causal_localization_re
   --output-dir benchmarks/go_vla_benchmark/data/causal/report_patch_matched
 ```
 
+conda run --no-capture-output -n main python benchmarks/go_vla_benchmark/scripts/collect_openvla_intervention_tests.py --checkpoint /root/2026-04-01/checkpoints/best-merged --trace-output /root/dsait4125/benchmarks/go_vla_benchmark/data/interventions/simulator_interventions_patches.npz --summary-output /root/dsait4125/benchmarks/go_vla_benchmark/data/interventions/simulator_interventions_patches.json --runs patch-occlusion --simulator-demos 5 --stride 4 --device cuda:0 --attn-implementation eager && \
+python benchmarks/go_vla_benchmark/scripts/export_openvla_intervention_report.py --trace-input benchmarks/go_vla_benchmark/data/interventions/simulator_interventions_patches.npz --output-dir benchmarks/go_vla_benchmark/data/interventions/report_patches
+
+conda run --no-capture-output -n main python benchmarks/go_vla_benchmark/scripts/collect_openvla_causal_localization.py --dataset /root/dsait4125/benchmarks/go_vla_benchmark/data/source_go.hdf5 --checkpoint /root/2026-04-01/checkpoints/best-merged --trace-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_matched.npz --summary-output /root/dsait4125/benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_matched.json --corruption-type patch-occlusion --intervention-match --device cuda:0 --attn-implementation eager && python benchmarks/go_vla_benchmark/scripts/export_openvla_causal_localization_report.py --trace-input benchmarks/go_vla_benchmark/data/causal/source_go_patch_causal_matched.npz --output-dir benchmarks/go_vla_benchmark/data/causal/report_patch_matched
+
+
+
 When `--intervention-match` is set, the causal collector ignores manual demo and
 frame selection and instead follows the intervention `.npz` exactly. By
 default it looks for a matching trace under
