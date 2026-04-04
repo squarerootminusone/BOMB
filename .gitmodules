@@ -1,3 +1,6 @@
 [submodule "openvla-oft"]
 	path = openvla-oft
 	url = https://github.com/squarerootminusone/openvla-oft.git
+[submodule "benchmarks/RoboTwin"]
+	path = benchmarks/RoboTwin
+	url = https://github.com/squarerootminusone/RoboTwin.git
