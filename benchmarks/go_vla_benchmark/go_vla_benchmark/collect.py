@@ -466,6 +466,7 @@ def _collect_worker(config: dict) -> dict:
         eef_overlay_trail=config["eef_overlay_trail"],
         robot=config["robot"],
         gripper_types=config["gripper_types"],
+        no_perturbations=config.get("no_perturbations", False),
     )
     env_interface = MG_GoJacoSingleMove(env=env)
 
@@ -553,6 +554,7 @@ def collect_source_demonstrations(
     gripper_types: str = "default",
     num_workers: int = 1,
     hover_height_noise: float = 0.0,
+    no_perturbations: bool = False,
 ) -> Dict[str, object]:
     """Collect source demonstrations for MimicGen using scripted control."""
     if num_demos <= 0:
@@ -594,6 +596,7 @@ def collect_source_demonstrations(
                 "side_margin": side_margin,
                 "recovery_steps": recovery_steps,
                 "hover_height_noise": hover_height_noise,
+                "no_perturbations": no_perturbations,
             })
 
         ctx = multiprocessing.get_context("spawn")
@@ -653,6 +656,7 @@ def collect_source_demonstrations(
         eef_overlay_trail=eef_overlay_trail,
         robot=robot,
         gripper_types=gripper_types,
+        no_perturbations=no_perturbations,
     )
     env_interface = MG_GoJacoSingleMove(env=env)
 

@@ -138,6 +138,13 @@ def parse_args() -> argparse.Namespace:
         default=10,
         help="number of prior EEF points shown in overlay trail",
     )
+    parser.add_argument(
+        "--no-perturbations",
+        action="store_true",
+        help="disable ALL perturbations (visual randomization, board shift/rotation, "
+             "lighting, camera, stone/table material, white balance, source stone jitter, "
+             "robot initialization noise)",
+    )
     return parser.parse_args()
 
 
@@ -186,6 +193,7 @@ def main() -> None:
         gripper_types=args.gripper_types,
         num_workers=args.num_workers,
         hover_height_noise=args.hover_height_noise,
+        no_perturbations=args.no_perturbations,
     )
     print(json.dumps(stats, indent=2))
 

@@ -197,7 +197,9 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         renderer: str = "mujoco",
         renderer_config: Optional[dict] = None,
         seed: Optional[int] = None,
+        no_perturbations: bool = False,
     ):
+        self.no_perturbations = no_perturbations
         self.board_size = 5
         self.table_full_size = np.array((0.9, 0.9, 0.05), dtype=np.float32)
         self.table_friction = (1.5, 0.05, 0.02)
@@ -208,7 +210,7 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
         self._board_center_xy_default = self.board_center_xy.copy()
         self._board_shift_range = 0.015  # ±1.5cm XY randomization
         self.stone_radius = 0.013
-        self.stone_height = 0.006
+        self.stone_height = 0.012
         self.stone_half_height = self.stone_height * 0.5
         self.collision_stone_radius = self.stone_radius * 0.94
         self.collision_stone_half_height = self.stone_half_height
@@ -642,11 +644,12 @@ class _Go5x5RigidRobosuite(ManipulationEnv):
     def _reset_internal(self):
         super()._reset_internal()
         self._patch_physics_params()
-        self._randomize_board_position(rng=self.rng)
-        self._randomize_lighting(rng=self.rng)
-        self._randomize_camera(rng=self.rng)
-        self._randomize_stone_material(rng=self.rng)
-        self._randomize_table_material(rng=self.rng)
+        if not self.no_perturbations:
+            self._randomize_board_position(rng=self.rng)
+            self._randomize_lighting(rng=self.rng)
+            self._randomize_camera(rng=self.rng)
+            self._randomize_stone_material(rng=self.rng)
+            self._randomize_table_material(rng=self.rng)
         for stone_idx in range(len(self._stone_objects)):
             self.hide_stone(stone_idx)
         self.sim.forward()
@@ -979,20 +982,24 @@ class GoRobosuiteBenchmarkEnv:
         gnugo_path: Optional[str] = None,
         robot: str = "Panda",
         gripper_types: str = "default",
+        no_perturbations: bool = False,
     ):
         del drive_physical_arm
         del render_carried_stone
         del gnugo_path
         self.seed = int(seed)
+        self.no_perturbations = bool(no_perturbations)
         self._rng = np.random.RandomState(self.seed)
         self.environment_name = str(environment_name)
 
         controller_config = self._make_controller_config(robot=robot)
+        init_noise = None if self.no_perturbations else {"magnitude": 0.08, "type": "uniform"}
         self._rs_env = _Go5x5RigidRobosuite(
             robots=robot,
             controller_configs=controller_config,
             gripper_types=gripper_types,
-            initialization_noise={"magnitude": 0.08, "type": "uniform"},
+            initialization_noise=init_noise,
+            no_perturbations=self.no_perturbations,
             has_renderer=False,
             has_offscreen_renderer=True,
             render_camera="agentview",
@@ -1342,7 +1349,10 @@ class GoRobosuiteBenchmarkEnv:
         self.board_surface_z = float(self._rs_env.board_surface_z)
 
         # White balance shift for color augmentation
-        self._wb_shift = self._rng.uniform(-0.08, 0.08, size=(3,)).astype(np.float32)
+        if self.no_perturbations:
+            self._wb_shift = np.zeros(3, dtype=np.float32)
+        else:
+            self._wb_shift = self._rng.uniform(-0.08, 0.08, size=(3,)).astype(np.float32)
 
         self.workspace_low, self.workspace_high = self._compute_workspace_bounds()
         self._available_stones = {
@@ -1375,8 +1385,11 @@ class GoRobosuiteBenchmarkEnv:
 
         # Randomize source stone position near EEF
         eef_xyz = self.get_eef_pose()[:3, 3]
-        stone_offset = self._rng.uniform(-0.015, 0.015, size=(2,))
-        source_xy = eef_xyz[:2] + stone_offset
+        if self.no_perturbations:
+            source_xy = eef_xyz[:2].copy()
+        else:
+            stone_offset = self._rng.uniform(-0.015, 0.015, size=(2,))
+            source_xy = eef_xyz[:2] + stone_offset
         source_xy = np.clip(source_xy, self.workspace_low[:2], self.workspace_high[:2])
         self._source_xyz = np.array(
             [source_xy[0], source_xy[1],

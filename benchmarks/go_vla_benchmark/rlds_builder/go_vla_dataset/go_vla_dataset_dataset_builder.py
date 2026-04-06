@@ -115,6 +115,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
     RELEASE_NOTES = {
         "1.0.0": "Initial release.",
         "2.0.0": "4-DOF actions [dx,dy,dz,gripper] instead of zero-padded 7-DOF.",
+        "2.1.0": "8 Hz control, taller stones (12mm), no perturbations, 200 demos.",
         "3.0.0": "8 Hz control, board/lighting randomization, near-duplicate frame removal.",
     }
 
