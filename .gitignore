@@ -14,8 +14,18 @@ __pycache__/
 *.pyc
 MUJOCO_LOG.TXT
 rlds_build.log
+*.log
 
-data
+# Video files
+*.mp4
+*.avi
+*.mov
+
+# Data directories
+data/
 openvla-modified/
 tensorflow_datasets/
 tensorflow_datasets_old/
+
+# Experiment logs
+openvla/experiments/logs/

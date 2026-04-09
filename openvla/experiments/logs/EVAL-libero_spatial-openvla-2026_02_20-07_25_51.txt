@@ -1,5 +1,0 @@
-Task suite: libero_spatial
-
-Task: pick up the black bowl between the plate and the ramekin and place it on the plate
-Starting episode 1...
-Caught exception: CUDA out of memory. Tried to allocate 2.00 MiB. GPU 0 has a total capacity of 15.46 GiB of which 8.56 MiB is free. Including non-PyTorch memory, this process has 14.63 GiB memory in use. Of the allocated memory 14.09 GiB is allocated by PyTorch, and 41.33 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf)

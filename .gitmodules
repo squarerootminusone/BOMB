@@ -1,1 +1,11 @@
+[submodule "deepmind-research"]
+	path = deepmind-research
+	url = https://github.com/deepmind/deepmind-research.git
 
+[submodule "robosuite"]
+	path = robosuite
+	url = https://github.com/ARISE-Initiative/robosuite.git
+
+[submodule "benchmarks/RoboTwin"]
+	path = benchmarks/RoboTwin
+	url = https://github.com/squarerootminusone/RoboTwin.git

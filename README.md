@@ -1,104 +1,65 @@
-# Go VLA Benchmark
+# BOMB: BOard Manipulation Benchmark
 
-Benchmark for fine-tuning and evaluating Vision-Language-Action (VLA) models on a simulated 5x5 Go stone placement task using a Panda arm in robosuite/MuJoCo.
+**[Read the full blog post](https://hackmd.io/@soZ5hy2XQ5ia8pihx7AdHQ/r1gbwuUibe)**
 
-## Models & Results
+A simulation benchmark for evaluating Vision-Language-Action (VLA) models on fine-grained spatial manipulation tasks using Go stone placement on a 5×5 board.
 
-Pre-trained checkpoints and evaluation videos are available on HuggingFace: [MJ22x/go-vla-benchmark](https://huggingface.co/datasets/MJ22x/go-vla-benchmark)
+## Overview
 
-| Model | Base | Params | Fine-tuning | Train L1 | Engine Success |
-|-------|------|--------|-------------|----------|---------------|
-| **OpenVLA** | `openvla/openvla-7b` | 7B | QLoRA r=32 | 0.039 | 0% |
-| **SpatialVLA** | `IPEC-COMMUNITY/spatialvla-4b-224-pt` | 4B | LoRA r=32 | — | 0% |
-| **pi0** | `pi0_base` (PaliGemma 3B) | 3.3B | Full fine-tune | 0.083 | 0% |
+BOMB evaluates how well VLA models can ground language-specified spatial destinations in visual space. Models must locate and grasp a stone, then transport it to a specified board position. The benchmark is implemented in MuJoCo and RoboTwin2 simulators.
 
-## Training Scripts
+## Repository Structure
 
-| Model | Script | Config |
-|-------|--------|--------|
-| **OpenVLA** | `openvla/vla-scripts/finetune.py` | `openvla/configs/finetune.yaml` |
-| **SpatialVLA** | `spatialvla/train/spatialvla_finetune.py` | `spatialvla/configs/finetune.yaml` |
-| **pi0** | `openpi/scripts/train.py` | `openpi/src/openpi/training/config.py` (config name: `pi0_go_vla`) |
+### Models
 
-pi0 requires converting the RLDS dataset to LeRobot format first via `openpi/examples/go_vla/convert_go_vla_to_lerobot.py`.
+| Model | Location | Training Script |
+|-------|----------|-----------------|
+| **OpenVLA** (7B) | `openvla/` | `openvla/vla-scripts/finetune.py` |
+| **OpenVLA-OFT** | `openvla-oft-repo/` | `openvla-oft-repo/vla-scripts/finetune.py` |
+| **SpatialVLA** (4B) | `spatialvla/` | `spatialvla/scripts/finetune_hydra.py` |
+| **π₀** (3.3B) | `openpi/` | `openpi/scripts/train.py` |
 
-## Loading Checkpoints
+### Benchmark & Evaluation
 
-### OpenVLA (LoRA adapter)
+| Component | Location |
+|-----------|----------|
+| GO Environment | `benchmarks/go_vla_benchmark/go_vla_benchmark/` |
+| RoboTwin2 Simulator | `benchmarks/RoboTwin/` |
+| Evaluation Script | `scripts/evaluation/eval_openvla.py` |
 
-```python
-from transformers import AutoConfig, AutoImageProcessor, AutoModelForVision2Seq, AutoProcessor, BitsAndBytesConfig
-from peft import PeftModel
-from prismatic.extern.hf.configuration_prismatic import OpenVLAConfig
-from prismatic.extern.hf.modeling_prismatic import OpenVLAForActionPrediction
-from prismatic.extern.hf.processing_prismatic import PrismaticImageProcessor, PrismaticProcessor
+### Explainability
 
-AutoConfig.register("openvla", OpenVLAConfig)
-AutoImageProcessor.register(OpenVLAConfig, PrismaticImageProcessor)
-AutoProcessor.register(OpenVLAConfig, PrismaticProcessor)
-AutoModelForVision2Seq.register(OpenVLAConfig, OpenVLAForActionPrediction)
+All explainability methods are in `benchmarks/go_vla_benchmark/go_vla_benchmark/explainability/`:
 
-adapter_path = "path/to/openvla/best"  # from HF dataset
-processor = AutoProcessor.from_pretrained(adapter_path, trust_remote_code=True)
-base = AutoModelForVision2Seq.from_pretrained("openvla/openvla-7b",
-    torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True,
-    quantization_config=BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16))
-vla = PeftModel.from_pretrained(base, adapter_path)
+| Method | Description |
+|--------|-------------|
+| Patch Masking | Occlude visual regions to measure action prediction changes |
+| Text Intervention | Mask instruction tokens via attention masks |
+| Activation Patching | Restore clean activations at specific layers/heads |
 
-# Set norm stats on inner model
-vla.base_model.model.norm_stats = json.load(open(f"{adapter_path}/dataset_statistics.json"))
-vla.eval()
+Related scripts:
+- `scripts/collection/collect_openvla_causal_localization.py`
+- `scripts/collection/collect_openvla_intervention_tests.py`
+- `scripts/export/export_openvla_attention_videos.py`
+- `scripts/export/export_openvla_causal_localization_report.py`
+- `scripts/export/export_openvla_intervention_report.py`
 
-# Inference
-inputs = processor(prompt, image)
-inputs["pixel_values"] = inputs["pixel_values"].to("cuda", dtype=torch.bfloat16)
-inputs["input_ids"] = inputs["input_ids"].to("cuda")
-inputs["attention_mask"] = inputs["attention_mask"].to("cuda")
-action = vla.predict_action(**inputs, unnorm_key="go_vla_dataset", do_sample=False)
-# action is [dx, dy, dz, gripper] in OpenVLA convention (gripper: 1=open, 0=close)
+### Scripts
+
+```
+scripts/
+├── collection/      # Data collection (demos, explanations)
+├── processing/      # Data conversion (RLDS, augmentation)
+├── evaluation/      # Model evaluation
+├── export/          # Video and report generation
+├── analysis/        # Dataset inspection and statistics
+├── setup/           # Environment setup and diagnostics
+└── utilities/       # Self-play, verification
 ```
 
-### SpatialVLA (LoRA adapter)
+## Quick Start
 
-```python
-from model import SpatialVLAConfig, SpatialVLAForConditionalGeneration, SpatialVLAProcessor
-from peft import PeftModel
-
-adapter_path = "path/to/spatialvla/best"
-processor = SpatialVLAProcessor.from_pretrained(adapter_path, trust_remote_code=True)
-base = SpatialVLAForConditionalGeneration.from_pretrained(
-    "IPEC-COMMUNITY/spatialvla-4b-224-pt", torch_dtype=torch.bfloat16, trust_remote_code=True)
-model = PeftModel.from_pretrained(base, adapter_path)
-model = model.merge_and_unload().eval().cuda()
-
-# Inference
-inputs = processor(images=[image], text=prompt, return_tensors="pt")
-generation_outputs = model.predict_action(inputs)
-result = processor.decode_actions(generation_outputs, unnorm_key="go_vla_dataset/6.0.0")
-action_7d = result["actions"][0]  # 7-DoF
-action_4d = np.concatenate([action_7d[:3], action_7d[6:7]])  # [dx, dy, dz, gripper]
-```
-
-### pi0 (full checkpoint, JAX)
-
-```python
-from openpi.training import config as _config
-from openpi.policies import policy_config as _policy_config
-
-config = _config.get_config("pi0_go_vla")
-policy = _policy_config.create_trained_policy(config, "path/to/pizero/best")
-
-# Inference
-obs = {
-    "image": image,  # uint8 (256, 256, 3)
-    "state": np.zeros(4, dtype=np.float32),
-    "prompt": "What action should the robot take to place a black stone at row 2, column 3?",
-}
-result = policy.infer(obs)
-action = result["actions"][0, :4]  # [dx, dy, dz, gripper]
-```
-
-## Environment Setup
+### Environment Setup
 
 ```bash
 conda create -n mujogo python=3.11 -y
@@ -106,112 +67,57 @@ conda activate mujogo
 pip install torch torchvision torchaudio
 pip install -e openvla --no-deps
 pip install -r openvla/requirements-finetune.txt
-pip install -e mimicgen --no-deps
 ```
 
-## Data Generation
-
-### Collect source demonstrations
+### Data Collection
 
 ```bash
-MUJOCO_GL=glfw python benchmarks/go_vla_benchmark/scripts/collect_source_demos.py \
-    --num-demos 100 --camera-size 256 \
-    --environment-name robosuite_go_5x5_rigid_bodies
+MUJOCO_GL=glfw python scripts/collection/collect_source_demos.py \
+    --num-demos 100 --camera-size 256
 ```
 
-### Convert to RLDS
+### Training (OpenVLA example)
 
 ```bash
-python benchmarks/go_vla_benchmark/scripts/convert_to_rlds.py \
-    --input benchmarks/go_vla_benchmark/data/source_go.hdf5
-```
-
-The OpenVLA training path expects the converted RLDS dataset to expose the
-gripper as an absolute command in `[0, 1]` with `1=open` and `0=close`, while
-the simulator still uses raw env commands `-1=open`, `+1=close`. You can
-confirm the built dataset with:
-
-```bash
-python benchmarks/go_vla_benchmark/scripts/verify_rlds.py
-```
-
-## Training
-
-### OpenVLA (QLoRA)
-
-```bash
-MUJOCO_GL=egl PYTHONPATH=openvla python openvla/vla-scripts/finetune.py \
-    --data_root_dir ~/tensorflow_datasets \
+MUJOCO_GL=egl python openvla/vla-scripts/finetune.py \
     --dataset_name go_vla_dataset \
-    --run_root_dir outputs/openvla \
-    --adapter_tmp_dir outputs/openvla_tmp \
-    --batch_size 4 \
-    --grad_accumulation_steps 32 \
-    --lora_rank 32 \
-    --use_lora True \
-    --use_quantization True \
-    --learning_rate 5e-4 \
-    --save_steps 500
+    --batch_size 4 --lora_rank 32 --use_quantization True
 ```
 
-### SpatialVLA (LoRA)
+### Evaluation
 
 ```bash
-PYTHONPATH=spatialvla LAUNCHER=pytorch torchrun --standalone --nnodes=1 --nproc-per-node=1 \
-    spatialvla/train/spatialvla_finetune.py \
-    --model_name_or_path IPEC-COMMUNITY/spatialvla-4b-224-pt \
-    --data_root_dir ~/tensorflow_datasets --data_mix go_vla \
-    --lora 32 --lora_alpha 32 --lora_target linear \
-    --mask_rotation_loss True --action_forward_steps 3 \
-    --flash_attn True --grad_checkpoint True \
-    --output_dir outputs/spatialvla_lora \
-    --bf16 True --tf32 True --num_train_epochs 50 \
-    --per_device_train_batch_size 32 --gradient_accumulation_steps 8 \
-    --save_strategy steps --save_steps 500 --save_total_limit 2 \
-    --learning_rate 5e-4 --deepspeed spatialvla/scripts/zero1.json \
-    --report_to wandb
+MUJOCO_GL=egl python scripts/evaluation/eval_openvla.py \
+    --checkpoint <path_to_checkpoint> --num-episodes 50
 ```
 
-### pi0 (full fine-tune, requires openpi)
+## Perturbations
 
-```bash
-cd openpi
-uv run examples/go_vla/convert_go_vla_to_lerobot.py --data-dir ~/tensorflow_datasets
-uv run scripts/compute_norm_stats.py pi0_go_vla
-uv run scripts/train.py pi0_go_vla --exp-name go_vla
-```
+The benchmark tests robustness across multiple perturbation dimensions:
+- Table color/texture and reflectivity
+- Stone layouts and initial positions
+- Color balance and brightness
+- Camera FoV and angle
 
-## Evaluation
+## Pre-trained Checkpoints
 
-### Engine rollout (compounding error)
+Available on HuggingFace: [MJ22x/go-vla-benchmark](https://huggingface.co/datasets/MJ22x/go-vla-benchmark)
 
-```bash
-MUJOCO_GL=egl python openvla/vla-scripts/eval_engine.py \
-    --adapter-path outputs/<path>/checkpoints/latest \
-    --num-episodes 20 --save-videos --load-4bit
-```
+## Contributors
 
-### Train data eval (isolated frames, no compounding)
+- Paul ([@squarerootminusone](https://github.com/squarerootminusone))
+- Marcin ([@marjarai](https://github.com/marjarai))
+- Rafael ([@rafael-alani](https://github.com/rafael-alani))
 
-```bash
-python openvla/vla-scripts/eval_traindata.py \
-    --adapter-path outputs/<path>/checkpoints/latest \
-    --split all --save-videos --load-4bit
-```
+## Acknowledgments
 
-### Self-play
+This project builds upon several open-source projects. We thank the original authors for their contributions:
 
-```bash
-MUJOCO_GL=egl python benchmarks/go_vla_benchmark/scripts/self_play.py \
-    --model-path outputs/<path>/checkpoints/latest \
-    --max-moves 5 --max-steps-per-move 200 --load-4bit \
-    --player1 random --player2 random
-```
-
-### Scripted controller baseline
-
-```bash
-MUJOCO_GL=egl python benchmarks/go_vla_benchmark/scripts/self_play.py \
-    --model-path outputs/<path>/checkpoints/latest \
-    --max-moves 5 --force-trajectory --force-on-failure
-```
+- **[OpenVLA](https://github.com/openvla/openvla)** (MIT License) — Kim, Pertsch, Karamcheti et al.
+- **[OpenVLA-OFT](https://github.com/moojink/openvla-oft)** (MIT License) — Kim, Finn, Liang et al.
+- **[π₀ / OpenPI](https://github.com/Physical-Intelligence/openpi)** (Apache 2.0) — Physical Intelligence
+- **[SpatialVLA](https://huggingface.co/IPEC-COMMUNITY/spatialvla-4b-224-pt)** (MIT License) — IPEC Community
+- **[MimicGen](https://github.com/NVlabs/mimicgen)** (NVIDIA License) — NVlabs
+- **[robosuite](https://github.com/ARISE-Initiative/robosuite)** — ARISE Initiative
+- **[DeepMind Research](https://github.com/deepmind/deepmind-research)** — DeepMind
+- **[RoboTwin](https://github.com/TianxingChen/RoboTwin)** — Chen et al.
