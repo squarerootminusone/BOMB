@@ -19,7 +19,7 @@ action_python() {
 action_python "$BENCH_DIR/scripts/check_setup.py" --strict
 
 action_python "$BENCH_DIR/scripts/collect_source_demos.py" \
-  --output "$BENCH_DIR/data/source_go.hdf5" \
+  --output "$BENCH_DIR/data/datasets/source_go.hdf5" \
   --environment-name "$ENV_NAME" \
   --num-demos 40 \
   --camera-size "$CAMERA_SIZE" \
@@ -35,8 +35,8 @@ action_python "$BENCH_DIR/scripts/collect_source_demos.py" \
   --side-margin 0.18
 
 action_python "$BENCH_DIR/scripts/generate_augmented_demos.py" \
-  --source "$BENCH_DIR/data/source_go.hdf5" \
-  --output "$BENCH_DIR/data/augmented_go.hdf5" \
+  --source "$BENCH_DIR/data/datasets/source_go.hdf5" \
+  --output "$BENCH_DIR/data/datasets/augmented_go.hdf5" \
   --task-config "$BENCH_DIR/configs/go_single_move_task.json" \
   --environment-name "$ENV_NAME" \
   --num-demos 200 \
@@ -45,4 +45,4 @@ action_python "$BENCH_DIR/scripts/generate_augmented_demos.py" \
   --success-hold-steps 20
 
 action_python "$BENCH_DIR/scripts/inspect_dataset.py" \
-  --dataset "$BENCH_DIR/data/augmented_go.hdf5"
+  --dataset "$BENCH_DIR/data/datasets/augmented_go.hdf5"

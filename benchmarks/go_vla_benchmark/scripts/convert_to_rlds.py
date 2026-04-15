@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
         "--input",
         required=True,
         type=str,
-        help="Path to the source HDF5 file (e.g. data/source_go.hdf5)",
+        help="Path to the source HDF5 file (e.g. data/datasets/source_go.hdf5)",
     )
     parser.add_argument(
         "--output-dir",

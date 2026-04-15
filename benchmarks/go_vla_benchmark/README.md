@@ -82,7 +82,7 @@ python benchmarks/go_vla_benchmark/scripts/run_go_viewer.py --env go_5x5_rigid_b
 
 ```bash
 python benchmarks/go_vla_benchmark/scripts/collect_source_demos.py \
-  --output benchmarks/go_vla_benchmark/data/source_go.hdf5 \
+  --output benchmarks/go_vla_benchmark/data/datasets/source_go.hdf5 \
   --environment-name robosuite_go_5x5_rigid_bodies \
   --num-demos 40 \
   --camera-size 512 \
@@ -116,8 +116,8 @@ For robosuite backend robot swaps, pass `--robot <RobotName>` (for example `--ro
 
 ```bash
 python benchmarks/go_vla_benchmark/scripts/export_agentview_video.py \
-  --dataset benchmarks/go_vla_benchmark/data/source_go.hdf5 \
-  --output benchmarks/go_vla_benchmark/data/source_go_preview.mp4 \
+  --dataset benchmarks/go_vla_benchmark/data/datasets/source_go.hdf5 \
+  --output benchmarks/go_vla_benchmark/data/previews/source_go_preview.mp4 \
   --num-demos 40 \
   --fps 4 \
   --macro-block-size 1
@@ -127,15 +127,15 @@ python benchmarks/go_vla_benchmark/scripts/export_agentview_video.py \
 
 ```bash
 python mimicgen/mimicgen/scripts/get_source_info.py \
-  --dataset benchmarks/go_vla_benchmark/data/source_go.hdf5
+  --dataset benchmarks/go_vla_benchmark/data/datasets/source_go.hdf5
 ```
 
 ## 4) Generate Augmented Demos with MimicGen
 
 ```bash
 python benchmarks/go_vla_benchmark/scripts/generate_augmented_demos.py \
-  --source benchmarks/go_vla_benchmark/data/source_go.hdf5 \
-  --output benchmarks/go_vla_benchmark/data/augmented_go.hdf5 \
+  --source benchmarks/go_vla_benchmark/data/datasets/source_go.hdf5 \
+  --output benchmarks/go_vla_benchmark/data/datasets/augmented_go.hdf5 \
   --task-config benchmarks/go_vla_benchmark/configs/go_single_move_task.json \
   --environment-name robosuite_go_5x5_rigid_bodies \
   --num-demos 200 \
@@ -156,7 +156,7 @@ Augmentations come from:
 
 ```bash
 python benchmarks/go_vla_benchmark/scripts/inspect_dataset.py \
-  --dataset benchmarks/go_vla_benchmark/data/augmented_go.hdf5
+  --dataset benchmarks/go_vla_benchmark/data/datasets/augmented_go.hdf5
 ```
 
 ## Diversity Controls

@@ -13,13 +13,13 @@ import tensorflow_datasets as tfds
 _DESCRIPTION = """\
 Go VLA benchmark demonstrations for fine-tuning vision-language-action models.
 Each episode is a single stone placement on a 5x5 Go board using a robot arm
-with OSC position control (4-DoF actions padded to 7-DoF).
+with 4-DoF actions (3 position + 1 gripper).
 """
 
 _CITATION = ""
 
 _DEFAULT_HDF5_PATH = str(
-    Path(__file__).resolve().parents[2] / "data" / "source_go.hdf5"
+    Path(__file__).resolve().parents[2] / "data" / "datasets" / "source_go.hdf5"
 )
 
 _INSTRUCTION_TEMPLATES = [
@@ -80,10 +80,12 @@ def _compute_use_embedding(text: str) -> np.ndarray:
 class Builder(tfds.core.GeneratorBasedBuilder):
     """TFDS builder for Go VLA demonstrations."""
 
-    VERSION = tfds.core.Version("1.1.0")
+    VERSION = tfds.core.Version("2.1.0")
     RELEASE_NOTES = {
         "1.0.0": "Initial release.",
         "1.1.0": "Downsample to ~5 Hz and filter no-op actions.",
+        "2.0.0": "4-DOF actions [dx,dy,dz,gripper] instead of zero-padded 7-DOF.",
+        "2.1.0": "8 Hz control, taller stones (12mm), no perturbations, 200 demos.",
     }
 
     def _info(self) -> tfds.core.DatasetInfo:
@@ -105,7 +107,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                                 }
                             ),
                             "action": tfds.features.Tensor(
-                                shape=(7,), dtype=np.float32
+                                shape=(4,), dtype=np.float32
                             ),
                             "reward": np.float32,
                             "discount": np.float32,
@@ -151,7 +153,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                     ep["obs/board_state"], dtype=np.float32
                 )
 
-                actions_7 = _pad_action_4to7(actions_4)
+                actions = actions_4  # 4-DOF: [dx, dy, dz, gripper]
                 row, col = _derive_target_from_board_state(board_state)
 
                 rng = np.random.RandomState(seed=demo_idx)
@@ -161,13 +163,13 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                 instruction = template.format(r=row, c=col)
                 embedding = _compute_use_embedding(instruction)
 
-                # Downsample to ~5 Hz and filter no-op actions
+                # Filter no-op actions
                 keep = []
-                for t in range(0, actions_7.shape[0], _SUBSAMPLE_STRIDE):
-                    if np.linalg.norm(actions_7[t, :3]) >= _NOOP_THRESHOLD:
+                for t in range(actions.shape[0]):
+                    if np.linalg.norm(actions[t, :3]) >= _NOOP_THRESHOLD:
                         keep.append(t)
                 # Always keep last step for terminal signal
-                last_t = actions_7.shape[0] - 1
+                last_t = actions.shape[0] - 1
                 if last_t not in keep:
                     keep.append(last_t)
 
@@ -181,7 +183,7 @@ class Builder(tfds.core.GeneratorBasedBuilder):
                                 "image": images[t],
                                 "state": eef_pos[t],
                             },
-                            "action": actions_7[t],
+                            "action": actions[t],
                             "reward": 1.0 if is_last else 0.0,
                             "discount": 1.0,
                             "is_first": i == 0,

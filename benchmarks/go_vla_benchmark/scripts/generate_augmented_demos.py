@@ -25,13 +25,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--source",
         type=str,
-        default=str(REPO_ROOT / "benchmarks" / "go_vla_benchmark" / "data" / "source_go.hdf5"),
+        default=str(REPO_ROOT / "benchmarks" / "go_vla_benchmark" / "data" / "datasets" / "source_go.hdf5"),
         help="source hdf5 dataset path",
     )
     parser.add_argument(
         "--output",
         type=str,
-        default=str(REPO_ROOT / "benchmarks" / "go_vla_benchmark" / "data" / "augmented_go.hdf5"),
+        default=str(REPO_ROOT / "benchmarks" / "go_vla_benchmark" / "data" / "datasets" / "augmented_go.hdf5"),
         help="output hdf5 dataset path",
     )
     parser.add_argument(
